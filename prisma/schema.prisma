@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Rol {
+  id        Int       @id @default(autoincrement())
+  nombre    String    @unique
+  usuarios  Usuario[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Usuario {
+  id             Int       @id @default(autoincrement())
+  email          String    @unique
+  password       String
+  nombre         String
+  rolId          Int
+  rol            Rol       @relation(fields: [rolId], references: [id])
+  orders         Order[]   @relation("OrderCreator")
+  payments       Payment[] @relation("PaymentCreator")
+  deletedPayments Payment[] @relation("PaymentDeleter")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+enum SupplierStatus {
+  PENDING
+  COMPLETED
+}
+
+enum DebtStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+}
+
+enum PaymentMethod {
+  ZELLE
+  TRANSFER
+  CASH
+}
+
+model Supplier {
+  id              Int       @id @default(autoincrement())
+  companyName     String
+  taxId           String    @unique
+  phone           String?
+  status          SupplierStatus @default(PENDING)
+  totalDebt       Decimal   @default(0) @db.Decimal(10, 2)
+  lastPaymentDate DateTime?
+  orders          Order[]
+  debts           Debt[]
+  payments        Payment[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Order {
+  id           Int      @id @default(autoincrement())
+  supplierId   Int
+  supplier     Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  amount       Decimal  @db.Decimal(10, 2)
+  dispatchDate DateTime
+  creditDays   Int
+  dueDate      DateTime
+  createdBy    Int
+  createdByUser Usuario @relation("OrderCreator", fields: [createdBy], references: [id])
+  debt         Debt?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Debt {
+  id             Int          @id @default(autoincrement())
+  orderId        Int          @unique
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  supplierId     Int
+  supplier       Supplier     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  initialAmount  Decimal      @db.Decimal(10, 2)
+  remainingAmount Decimal     @db.Decimal(10, 2)
+  status         DebtStatus   @default(PENDING)
+  dueDate        DateTime
+  payments       Payment[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Payment {
+  id                Int           @id @default(autoincrement())
+  debtId            Int
+  debt              Debt          @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  supplierId        Int
+  supplier          Supplier      @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  amount            Decimal       @db.Decimal(10, 2)
+  paymentMethod     PaymentMethod
+  senderName        String
+  senderEmail       String?
+  confirmationNumber String?
+  paymentDate       DateTime
+  receiptFile       String?
+  verified          Boolean       @default(false)
+  shared            Boolean       @default(false)
+  sharedAt         DateTime?
+  exchangeRate      Decimal?      @db.Decimal(10, 4) // Tasa del dólar (opcional, solo para pagos en BS)
+  amountInBolivares Decimal?      @db.Decimal(10, 2) // Monto en bolívares (opcional, solo para pagos en BS)
+  createdBy         Int
+  createdByUser     Usuario       @relation("PaymentCreator", fields: [createdBy], references: [id])
+  deletedAt         DateTime?
+  deletedBy         Int?
+  deletedByUser     Usuario?      @relation("PaymentDeleter", fields: [deletedBy], references: [id])
+  deletionReason    String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
