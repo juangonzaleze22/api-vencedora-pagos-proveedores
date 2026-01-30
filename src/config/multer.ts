@@ -77,8 +77,8 @@ export const handleMulterError = (err: any, req: any, res: any, next: any) => {
   next();
 };
 
-// Configuraciones específicas
-export const uploadSingle = (fieldName: string): RequestHandler => upload.single(fieldName) as RequestHandler;
-export const uploadMultiple = (fieldName: string, maxCount?: number): RequestHandler => upload.array(fieldName, maxCount) as RequestHandler;
-export const uploadFields = (fields: multer.Field[]): RequestHandler => upload.fields(fields) as RequestHandler;
+// Configuraciones específicas (as unknown as RequestHandler evita conflicto entre @types/express y @types/multer)
+export const uploadSingle = (fieldName: string): RequestHandler => upload.single(fieldName) as unknown as RequestHandler;
+export const uploadMultiple = (fieldName: string, maxCount?: number): RequestHandler => upload.array(fieldName, maxCount) as unknown as RequestHandler;
+export const uploadFields = (fields: multer.Field[]): RequestHandler => upload.fields(fields) as unknown as RequestHandler;
 
