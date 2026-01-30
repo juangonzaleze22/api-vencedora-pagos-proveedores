@@ -1,6 +1,7 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { RequestHandler } from 'express';
 import { env } from './env';
 
 // Crear directorio base si no existe
@@ -77,7 +78,7 @@ export const handleMulterError = (err: any, req: any, res: any, next: any) => {
 };
 
 // Configuraciones específicas
-export const uploadSingle = (fieldName: string) => upload.single(fieldName);
-export const uploadMultiple = (fieldName: string, maxCount?: number) => upload.array(fieldName, maxCount);
-export const uploadFields = (fields: multer.Field[]) => upload.fields(fields);
+export const uploadSingle = (fieldName: string): RequestHandler => upload.single(fieldName);
+export const uploadMultiple = (fieldName: string, maxCount?: number): RequestHandler => upload.array(fieldName, maxCount);
+export const uploadFields = (fields: multer.Field[]): RequestHandler => upload.fields(fields);
 

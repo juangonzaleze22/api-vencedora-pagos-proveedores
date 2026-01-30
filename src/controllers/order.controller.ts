@@ -75,5 +75,43 @@ export class OrderController {
       next(error);
     }
   }
+
+  async update(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        throw new AppError('ID de orden inválido', 400);
+      }
+
+      // Preparar datos para actualizar
+      const updateData: any = {};
+      
+      if (req.body.dispatchDate !== undefined) {
+        updateData.dispatchDate = new Date(req.body.dispatchDate);
+      }
+      
+      if (req.body.creditDays !== undefined) {
+        updateData.creditDays = parseInt(req.body.creditDays);
+      }
+      
+      if (req.body.amount !== undefined) {
+        updateData.amount = parseFloat(req.body.amount);
+      }
+
+      console.log(`Actualizando orden ${id} con datos:`, updateData);
+      const updatedOrder = await orderService.updateOrder(id, updateData);
+      console.log(`Orden ${id} actualizada exitosamente`);
+
+      res.json({
+        success: true,
+        message: 'Orden actualizada exitosamente',
+        data: updatedOrder
+      });
+    } catch (error: any) {
+      console.error('Error al actualizar orden:', error);
+      next(error);
+    }
+  }
 }
 

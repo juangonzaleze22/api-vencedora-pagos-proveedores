@@ -1,6 +1,8 @@
 import prisma from '../config/database';
-import { CreateOrderDTO, OrderResponse, PaginationParams, PaginatedResponse } from '../types';
+import { Prisma } from '@prisma/client';
+import { CreateOrderDTO, UpdateOrderDTO, OrderResponse, PaginationParams, PaginatedResponse } from '../types';
 import { SupplierService } from './supplier.service';
+import { AppError } from '../middleware/error.middleware';
 
 const supplierService = new SupplierService();
 
@@ -323,6 +325,308 @@ export class OrderService {
         totalPages: Math.ceil(total / limit)
       }
     };
+  }
+
+  /**
+   * Actualizar una orden
+   * Permite actualizar dispatchDate, creditDays y/o amount
+   * Recalcula automáticamente dueDate y sincroniza con la deuda asociada
+   * Si amount cambia, actualiza la deuda y el proveedor
+   */
+  async updateOrder(
+    orderId: number,
+    data: UpdateOrderDTO
+  ): Promise<OrderResponse> {
+    try {
+      console.log(`🔄 Actualizando orden ${orderId} con datos:`, data);
+
+      // 1. Obtener la orden actual con su deuda asociada y pagos
+      const currentOrder = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          supplier: {
+            select: {
+              id: true,
+              companyName: true,
+              taxId: true,
+              phone: true,
+              totalDebt: true,
+              status: true
+            }
+          },
+          debt: {
+            include: {
+              payments: {
+                where: {
+                  deletedAt: null
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (!currentOrder) {
+        throw new AppError('Orden no encontrada', 404);
+      }
+
+      // 2. Validar que al menos un campo se esté actualizando
+      const oldAmount = Number(currentOrder.amount);
+      const hasChanges =
+        (data.dispatchDate !== undefined && 
+         new Date(data.dispatchDate).getTime() !== new Date(currentOrder.dispatchDate).getTime()) ||
+        (data.creditDays !== undefined && data.creditDays !== currentOrder.creditDays) ||
+        (data.amount !== undefined && data.amount !== oldAmount);
+
+      if (!hasChanges) {
+        throw new AppError('No se han realizado cambios en la orden', 400);
+      }
+
+      // 3. Validar amount si se proporciona
+      if (data.amount !== undefined && data.amount <= 0) {
+        throw new AppError('El monto debe ser mayor a 0', 400);
+      }
+
+      // 4. Calcular nuevos valores
+      const newDispatchDate = data.dispatchDate 
+        ? new Date(data.dispatchDate) 
+        : new Date(currentOrder.dispatchDate);
+      
+      const newCreditDays = data.creditDays !== undefined 
+        ? data.creditDays 
+        : currentOrder.creditDays;
+
+      const newAmount = data.amount !== undefined 
+        ? data.amount 
+        : oldAmount;
+
+      // 5. Recalcular dueDate = dispatchDate + creditDays
+      const newDueDate = new Date(newDispatchDate);
+      newDueDate.setDate(newDueDate.getDate() + newCreditDays);
+
+      console.log(`📅 Cálculo de fechas:`, {
+        oldDispatchDate: currentOrder.dispatchDate,
+        newDispatchDate: newDispatchDate,
+        oldCreditDays: currentOrder.creditDays,
+        newCreditDays: newCreditDays,
+        oldDueDate: currentOrder.dueDate,
+        newDueDate: newDueDate
+      });
+
+      // 6. Calcular cambios en deuda si amount cambió
+      const amountChanged = data.amount !== undefined && data.amount !== oldAmount;
+      let debtUpdateData: any = { dueDate: newDueDate };
+      let supplierUpdateData: any = {};
+
+      if (amountChanged && currentOrder.debt) {
+        const oldInitialAmount = Number(currentOrder.debt.initialAmount);
+        const oldRemainingAmount = Number(currentOrder.debt.remainingAmount);
+        
+        // Calcular la diferencia en el monto inicial
+        const difference = newAmount - oldAmount;
+        
+        // El remainingAmount debe ajustarse por la diferencia
+        // Si aumentamos amount en $100, remainingAmount también aumenta en $100
+        const newRemainingAmount = Math.max(0, oldRemainingAmount + difference);
+        
+        // Recalcular el status de la deuda
+        const newDebtStatus: 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' = 
+          newRemainingAmount <= 0 ? 'PAID' : 'PENDING';
+
+        debtUpdateData = {
+          ...debtUpdateData,
+          initialAmount: newAmount,
+          remainingAmount: newRemainingAmount,
+          status: newDebtStatus
+        };
+
+        console.log(`💰 Actualizando monto de orden:`, {
+          oldAmount: oldAmount.toFixed(2),
+          newAmount: newAmount.toFixed(2),
+          difference: difference.toFixed(2),
+          oldInitialAmount: oldInitialAmount.toFixed(2),
+          newInitialAmount: newAmount.toFixed(2),
+          oldRemainingAmount: oldRemainingAmount.toFixed(2),
+          newRemainingAmount: newRemainingAmount.toFixed(2),
+          newDebtStatus: newDebtStatus
+        });
+      }
+
+      // 7. Actualizar en una transacción para mantener consistencia
+      const updatedOrder = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        // Actualizar la orden
+        const orderUpdateData: any = {
+          dispatchDate: newDispatchDate,
+          creditDays: newCreditDays,
+          dueDate: newDueDate
+        };
+        
+        if (amountChanged) {
+          orderUpdateData.amount = newAmount;
+        }
+
+        const order = await tx.order.update({
+          where: { id: orderId },
+          data: orderUpdateData,
+          include: {
+            supplier: {
+              select: {
+                id: true,
+                companyName: true,
+                taxId: true,
+                phone: true
+              }
+            }
+          }
+        });
+
+        // Actualizar la deuda asociada (si existe)
+        if (currentOrder.debt) {
+          await tx.debt.update({
+            where: { orderId: orderId },
+            data: debtUpdateData
+          });
+          console.log(`✅ Deuda ${currentOrder.debt.id} actualizada`);
+        }
+
+        // Si amount cambió, recalcular totalDebt del proveedor
+        if (amountChanged) {
+          // Obtener todas las deudas del proveedor
+          const allDebtsForSupplier = await tx.debt.findMany({
+            where: {
+              supplierId: currentOrder.supplierId
+            },
+            select: {
+              remainingAmount: true
+            }
+          });
+
+          const newTotalDebt = allDebtsForSupplier.reduce((sum: number, debt: any) => {
+            return sum + Math.max(0, Number(debt.remainingAmount));
+          }, 0);
+
+          // El status del proveedor se calcula automáticamente: PENDING si totalDebt > 0, COMPLETED si totalDebt === 0
+          const supplierStatus: 'PENDING' | 'COMPLETED' = newTotalDebt > 0 ? 'PENDING' : 'COMPLETED';
+
+          await tx.supplier.update({
+            where: { id: currentOrder.supplierId },
+            data: {
+              totalDebt: newTotalDebt,
+              status: supplierStatus
+            }
+          });
+
+          console.log(`💰 Proveedor ${currentOrder.supplierId} actualizado:`, {
+            oldTotalDebt: Number(currentOrder.supplier.totalDebt).toFixed(2),
+            newTotalDebt: newTotalDebt.toFixed(2),
+            oldStatus: currentOrder.supplier.status,
+            newStatus: supplierStatus
+          });
+        }
+
+        return order;
+      });
+
+      console.log(`✅ Orden ${orderId} actualizada en BD`);
+
+      // 6. Obtener la orden completa con su deuda para construir la respuesta
+      const orderWithDebt = await prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          supplier: {
+            select: {
+              id: true,
+              companyName: true,
+              taxId: true,
+              phone: true
+            }
+          },
+          debt: {
+            include: {
+              payments: {
+                where: {
+                  deletedAt: null
+                },
+                include: {
+                  createdByUser: {
+                    select: {
+                      id: true,
+                      nombre: true,
+                      email: true
+                    }
+                  },
+                  deletedByUser: {
+                    select: {
+                      id: true,
+                      nombre: true,
+                      email: true
+                    }
+                  }
+                },
+                orderBy: {
+                  createdAt: 'desc'
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (!orderWithDebt) {
+        throw new AppError('Error al obtener la orden actualizada', 500);
+      }
+
+      // 7. Construir respuesta en el formato OrderResponse
+      return {
+        id: orderWithDebt.id,
+        supplierId: orderWithDebt.supplierId,
+        supplier: orderWithDebt.supplier,
+        amount: Number(orderWithDebt.amount),
+        dispatchDate: orderWithDebt.dispatchDate,
+        creditDays: orderWithDebt.creditDays,
+        dueDate: orderWithDebt.dueDate,
+        createdBy: orderWithDebt.createdBy,
+        createdAt: orderWithDebt.createdAt,
+        updatedAt: orderWithDebt.updatedAt,
+        debt: orderWithDebt.debt ? {
+          id: orderWithDebt.debt.id,
+          status: orderWithDebt.debt.status,
+          remainingAmount: Number(orderWithDebt.debt.remainingAmount),
+          initialAmount: Number(orderWithDebt.debt.initialAmount),
+          dueDate: orderWithDebt.debt.dueDate,
+          createdAt: orderWithDebt.debt.createdAt,
+          updatedAt: orderWithDebt.debt.updatedAt,
+          payments: orderWithDebt.debt.payments.map((p: any) => ({
+            id: p.id,
+            debtId: p.debtId,
+            supplierId: p.supplierId,
+            supplier: orderWithDebt.supplier,
+            amount: Number(p.amount),
+            paymentMethod: p.paymentMethod,
+            senderName: p.senderName,
+            senderEmail: p.senderEmail,
+            confirmationNumber: p.confirmationNumber,
+            paymentDate: p.paymentDate,
+            receiptFile: p.receiptFile,
+            verified: p.verified,
+            createdBy: p.createdBy,
+            deletedAt: p.deletedAt || null,
+            deletedBy: p.deletedBy || null,
+            deletedByUser: p.deletedByUser ? {
+              id: p.deletedByUser.id,
+              nombre: p.deletedByUser.nombre,
+              email: p.deletedByUser.email
+            } : null,
+            deletionReason: p.deletionReason || null,
+            createdAt: p.createdAt,
+            updatedAt: p.updatedAt
+          }))
+        } : undefined
+      };
+    } catch (error: any) {
+      console.error(`❌ Error al actualizar orden ${orderId}:`, error);
+      throw error;
+    }
   }
 }
 

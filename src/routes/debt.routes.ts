@@ -1,8 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { DebtService } from '../services/debt.service';
 import { PaymentService } from '../services/payment.service';
-import { authenticate } from '../middleware/auth.middleware';
-import { param } from 'express-validator';
+import { authenticate, authorize } from '../middleware/auth.middleware';
+import { param, body } from 'express-validator';
 import { validate } from '../middleware/validation.middleware';
 import { AppError } from '../middleware/error.middleware';
 import prisma from '../config/database';
@@ -195,6 +195,72 @@ router.get(
         data: debt
       });
     } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
+router.put(
+  '/:id',
+  [
+    param('id').isInt().withMessage('ID inválido'),
+    body('initialAmount').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const num = parseFloat(value);
+        if (isNaN(num)) {
+          throw new Error('El monto inicial debe ser un número válido');
+        }
+        if (num <= 0) {
+          throw new Error('El monto inicial debe ser mayor a 0');
+        }
+        if (num > 999999.99) {
+          throw new Error('El monto inicial es demasiado grande (máximo $999,999.99)');
+        }
+      }
+      return true;
+    }),
+    body('dueDate').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const date = new Date(value);
+        if (isNaN(date.getTime())) {
+          throw new Error('La fecha de vencimiento debe ser una fecha válida');
+        }
+      }
+      return true;
+    }),
+    validate
+  ],
+  authorize('ADMINISTRADOR', 'SUPERVISOR'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        throw new AppError('ID de deuda inválido', 400);
+      }
+
+      // Preparar datos para actualizar
+      const updateData: any = {};
+      
+      if (req.body.initialAmount !== undefined) {
+        updateData.initialAmount = parseFloat(req.body.initialAmount);
+      }
+      
+      if (req.body.dueDate !== undefined) {
+        updateData.dueDate = new Date(req.body.dueDate);
+      }
+
+      console.log(`Actualizando deuda ${id} con datos:`, updateData);
+      const updatedDebt = await debtService.updateDebt(id, updateData);
+      console.log(`Deuda ${id} actualizada exitosamente`);
+
+      res.json({
+        success: true,
+        message: 'Deuda actualizada exitosamente',
+        data: updatedDebt
+      });
+    } catch (error: any) {
+      console.error('Error al actualizar deuda:', error);
       next(error);
     }
   }

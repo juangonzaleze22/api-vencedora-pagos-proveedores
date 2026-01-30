@@ -1,6 +1,4 @@
 import prisma from '../config/database';
-// SupplierStatus type
-type SupplierStatus = 'PENDING' | 'COMPLETED';
 import {
   CreateSupplierDTO,
   UpdateSupplierDTO,
@@ -9,6 +7,8 @@ import {
   PaginationParams,
   PaginatedResponse
 } from '../types';
+import type { SupplierStatus } from '../types';
+import { AppError } from '../middleware/error.middleware';
 
 export class SupplierService {
   async createSupplier(data: CreateSupplierDTO, userId: number): Promise<SupplierResponse> {
@@ -151,31 +151,83 @@ export class SupplierService {
     });
 
     if (!supplier) {
-      throw new Error('Proveedor no encontrado');
+      throw new AppError('Proveedor no encontrado', 404);
+    }
+
+    // Validar que al menos un campo se esté actualizando
+    const hasChanges = 
+      (data.companyName !== undefined && data.companyName !== supplier.companyName) ||
+      (data.taxId !== undefined && data.taxId !== supplier.taxId) ||
+      (data.phone !== undefined && data.phone !== supplier.phone) ||
+      (data.status !== undefined && data.status !== supplier.status);
+
+    if (!hasChanges) {
+      throw new AppError('No se han realizado cambios en el proveedor', 400);
     }
 
     // Si se actualiza el taxId, verificar que sea único
-    if (data.taxId && data.taxId !== supplier.taxId) {
+    if (data.taxId !== undefined && data.taxId !== supplier.taxId) {
+      // Validar que el taxId no esté vacío
+      if (!data.taxId || data.taxId.trim() === '') {
+        throw new AppError('El RIF/Identificación Fiscal no puede estar vacío', 400);
+      }
+
       const existingSupplier = await prisma.supplier.findUnique({
-        where: { taxId: data.taxId }
+        where: { taxId: data.taxId.trim() }
       });
 
       if (existingSupplier) {
-        throw new Error('Ya existe un proveedor con este RIF/Identificación Fiscal');
+        throw new AppError('Ya existe un proveedor con este RIF/Identificación Fiscal', 400);
       }
+    }
+
+    // Preparar datos para actualizar
+    const updateData: any = {};
+
+    if (data.companyName !== undefined) {
+      if (!data.companyName || data.companyName.trim().length < 3) {
+        throw new AppError('El nombre de la empresa debe tener al menos 3 caracteres', 400);
+      }
+      updateData.companyName = data.companyName.trim();
+    }
+
+    if (data.taxId !== undefined) {
+      updateData.taxId = data.taxId.trim();
+    }
+
+    if (data.phone !== undefined) {
+      // Permitir null o string vacío para limpiar el teléfono
+      updateData.phone = data.phone === null || data.phone === '' ? null : data.phone.trim();
+    }
+
+    if (data.status !== undefined) {
+      // Validar que el status sea válido
+      if (data.status !== 'PENDING' && data.status !== 'COMPLETED') {
+        throw new AppError('El estado debe ser PENDING o COMPLETED', 400);
+      }
+      updateData.status = data.status;
     }
 
     const updated = await prisma.supplier.update({
       where: { id },
-      data: {
-        ...(data.companyName && { companyName: data.companyName }),
-        ...(data.taxId && { taxId: data.taxId }),
-        ...(data.phone && { phone: data.phone }),
-        ...(data.status && { status: data.status })
-      }
+      data: updateData
     });
 
     return this.mapToResponse(updated);
+  }
+
+  async deleteSupplier(id: number): Promise<void> {
+    const supplier = await prisma.supplier.findUnique({
+      where: { id }
+    });
+
+    if (!supplier) {
+      throw new AppError('Proveedor no encontrado', 404);
+    }
+
+    await prisma.supplier.delete({
+      where: { id }
+    });
   }
 
   async updateSupplierTotalDebt(supplierId: number, amount: number): Promise<void> {

@@ -37,10 +37,23 @@ router.put(
   validate([
     param('id').isInt().withMessage('ID inválido'),
     body('companyName').optional().trim().isLength({ min: 3 }).withMessage('El nombre de la empresa debe tener al menos 3 caracteres'),
-    body('phone').optional().trim().isString().withMessage('El teléfono debe ser una cadena de texto')
+    body('taxId').optional().trim().notEmpty().withMessage('El RIF/Identificación Fiscal no puede estar vacío'),
+    body('phone').optional().custom((value) => {
+      // Permitir null, string vacío o string válido
+      if (value === null || value === undefined || value === '') return true;
+      return typeof value === 'string';
+    }).withMessage('El teléfono debe ser una cadena de texto'),
+    body('status').optional().isIn(['PENDING', 'COMPLETED']).withMessage('El estado debe ser PENDING o COMPLETED')
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR'),
   supplierController.update.bind(supplierController)
+);
+
+router.delete(
+  '/:id',
+  validate([param('id').isInt().withMessage('ID inválido')]),
+  authorize('ADMINISTRADOR', 'SUPERVISOR'),
+  supplierController.delete.bind(supplierController)
 );
 
 router.get(

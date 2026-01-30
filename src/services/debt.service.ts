@@ -1,6 +1,7 @@
 import prisma from '../config/database';
 import { Prisma } from '@prisma/client';
 import { DebtResponse, SearchParams, PaginationParams, PaginatedResponse } from '../types';
+import { AppError } from '../middleware/error.middleware';
 
 export class DebtService {
   async updateDebtStatus(debtId: number): Promise<void> {
@@ -454,6 +455,248 @@ export class DebtService {
         totalPages: Math.ceil(total / limit)
       }
     };
+  }
+
+  /**
+   * Actualizar una deuda
+   * Permite actualizar initialAmount y dueDate
+   * Recalcula automáticamente remainingAmount, status de la deuda y totalDebt del proveedor
+   */
+  async updateDebt(
+    debtId: number,
+    data: {
+      initialAmount?: number;
+      dueDate?: Date;
+    }
+  ): Promise<DebtResponse> {
+    try {
+      console.log(`🔄 Actualizando deuda ${debtId} con datos:`, data);
+
+      // 1. Obtener la deuda actual con sus pagos
+      const currentDebt = await prisma.debt.findUnique({
+        where: { id: debtId },
+        include: {
+          supplier: {
+            select: {
+              id: true,
+              companyName: true,
+              taxId: true,
+              phone: true,
+              totalDebt: true,
+              status: true
+            }
+          },
+          payments: {
+            where: {
+              deletedAt: null // Solo pagos activos
+            }
+          }
+        }
+      });
+
+      if (!currentDebt) {
+        throw new AppError('Deuda no encontrada', 404);
+      }
+
+      // 2. Validar que al menos un campo se esté actualizando
+      const hasChanges =
+        (data.initialAmount !== undefined && data.initialAmount !== Number(currentDebt.initialAmount)) ||
+        (data.dueDate !== undefined && new Date(data.dueDate).getTime() !== new Date(currentDebt.dueDate).getTime());
+
+      if (!hasChanges) {
+        throw new AppError('No se han realizado cambios en la deuda', 400);
+      }
+
+      // 3. Validar initialAmount si se está actualizando
+      if (data.initialAmount !== undefined) {
+        if (data.initialAmount <= 0) {
+          throw new AppError('El monto inicial debe ser mayor a 0', 400);
+        }
+        if (data.initialAmount > 999999.99) {
+          throw new AppError('El monto inicial es demasiado grande (máximo $999,999.99)', 400);
+        }
+      }
+
+      // 4. Calcular el total pagado (suma de todos los pagos activos)
+      const totalPaid = currentDebt.payments.reduce((sum: number, payment: any) => {
+        return sum + Number(payment.amount);
+      }, 0);
+
+      // 5. Preparar datos para actualizar
+      const updateData: any = {};
+      let oldRemainingAmount = Number(currentDebt.remainingAmount);
+      let newRemainingAmount = oldRemainingAmount;
+
+      if (data.initialAmount !== undefined) {
+        const oldInitialAmount = Number(currentDebt.initialAmount);
+        const newInitialAmount = data.initialAmount;
+        
+        // Calcular la diferencia en el monto inicial
+        const difference = newInitialAmount - oldInitialAmount;
+        
+        // El remainingAmount debe ajustarse por la diferencia
+        // Si aumentamos initialAmount en $100, remainingAmount también aumenta en $100
+        newRemainingAmount = oldRemainingAmount + difference;
+        
+        // Asegurar que remainingAmount no sea negativo
+        newRemainingAmount = Math.max(0, newRemainingAmount);
+        
+        updateData.initialAmount = newInitialAmount;
+        updateData.remainingAmount = newRemainingAmount;
+
+        console.log(`💰 Actualizando monto inicial:`, {
+          oldInitialAmount: oldInitialAmount.toFixed(2),
+          newInitialAmount: newInitialAmount.toFixed(2),
+          difference: difference.toFixed(2),
+          oldRemainingAmount: oldRemainingAmount.toFixed(2),
+          newRemainingAmount: newRemainingAmount.toFixed(2),
+          totalPaid: totalPaid.toFixed(2)
+        });
+      }
+
+      if (data.dueDate !== undefined) {
+        updateData.dueDate = new Date(data.dueDate);
+        console.log(`📅 Actualizando fecha de vencimiento:`, {
+          oldDueDate: currentDebt.dueDate,
+          newDueDate: updateData.dueDate
+        });
+      }
+
+      // 6. Recalcular el status de la deuda basado en el nuevo remainingAmount
+      const finalRemainingAmount = data.initialAmount !== undefined 
+        ? newRemainingAmount 
+        : Number(currentDebt.remainingAmount);
+      
+      const today = new Date();
+      const dueDate = data.dueDate ? new Date(data.dueDate) : new Date(currentDebt.dueDate);
+      
+      let newStatus: 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' = 'PENDING';
+      
+      if (finalRemainingAmount <= 0) {
+        newStatus = 'PAID';
+      } else {
+        newStatus = 'PENDING';
+      }
+
+      updateData.status = newStatus;
+
+      console.log(`📊 Nuevo estado calculado para deuda ${debtId}:`, {
+        remainingAmount: finalRemainingAmount.toFixed(2),
+        status: newStatus
+      });
+
+      // 7. Actualizar la deuda en la base de datos
+      const updatedDebt = await prisma.debt.update({
+        where: { id: debtId },
+        data: updateData,
+        include: {
+          supplier: {
+            select: {
+              id: true,
+              companyName: true,
+              taxId: true,
+              phone: true
+            }
+          },
+          payments: {
+            where: {
+              deletedAt: null
+            },
+            orderBy: {
+              createdAt: 'desc'
+            }
+          }
+        }
+      });
+
+      console.log(`✅ Deuda ${debtId} actualizada en BD`);
+
+      // 8. RECALCULAR TOTAL DE DEUDA DEL PROVEEDOR
+      // Sumar todas las deudas restantes del proveedor para obtener el totalDebt correcto
+      const allDebtsForSupplier = await prisma.debt.findMany({
+        where: {
+          supplierId: currentDebt.supplierId,
+          // Solo contar deudas con remainingAmount > 0
+        },
+        select: {
+          remainingAmount: true
+        }
+      });
+
+      const newTotalDebt = allDebtsForSupplier.reduce((sum: number, debt: any) => {
+        return sum + Math.max(0, Number(debt.remainingAmount));
+      }, 0);
+
+      console.log(`💰 Recalculando totalDebt del proveedor ${currentDebt.supplierId}:`, {
+        oldTotalDebt: Number(currentDebt.supplier.totalDebt).toFixed(2),
+        newTotalDebt: newTotalDebt.toFixed(2),
+        numDebts: allDebtsForSupplier.length
+      });
+
+      // 9. ACTUALIZAR PROVEEDOR: totalDebt y status
+      // El status del proveedor se calcula automáticamente: PENDING si totalDebt > 0, COMPLETED si totalDebt === 0
+      const supplierStatus: 'PENDING' | 'COMPLETED' = newTotalDebt > 0 ? 'PENDING' : 'COMPLETED';
+
+      await prisma.supplier.update({
+        where: { id: currentDebt.supplierId },
+        data: {
+          totalDebt: newTotalDebt,
+          status: supplierStatus
+        }
+      });
+
+      console.log(`✅ Proveedor ${currentDebt.supplierId} actualizado:`, {
+        totalDebt: newTotalDebt.toFixed(2),
+        status: supplierStatus,
+        previousStatus: currentDebt.supplier.status
+      });
+
+      // 10. Construir respuesta
+      const allDebtsForSupplierNumber = await prisma.debt.findMany({
+        where: { supplierId: currentDebt.supplierId },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true }
+      });
+      const debtNumber = allDebtsForSupplierNumber.findIndex((d: any) => d.id === updatedDebt.id) + 1;
+
+      return {
+        id: updatedDebt.id,
+        orderId: updatedDebt.orderId,
+        supplierId: updatedDebt.supplierId,
+        supplier: updatedDebt.supplier,
+        initialAmount: Number(updatedDebt.initialAmount),
+        remainingAmount: Number(updatedDebt.remainingAmount),
+        status: updatedDebt.status,
+        dueDate: updatedDebt.dueDate,
+        createdAt: updatedDebt.createdAt,
+        updatedAt: updatedDebt.updatedAt,
+        debtNumber,
+        payments: updatedDebt.payments.map((p: any) => ({
+          id: p.id,
+          debtId: p.debtId,
+          supplierId: p.supplierId,
+          supplier: updatedDebt.supplier,
+          amount: Number(p.amount),
+          paymentMethod: p.paymentMethod,
+          senderName: p.senderName,
+          senderEmail: p.senderEmail,
+          confirmationNumber: p.confirmationNumber,
+          paymentDate: p.paymentDate,
+          receiptFile: p.receiptFile,
+          verified: p.verified,
+          createdBy: p.createdBy,
+          deletedAt: p.deletedAt || null,
+          deletedBy: p.deletedBy || null,
+          deletedByUser: null,
+          deletionReason: p.deletionReason || null,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt
+        }))
+      };
+    } catch (error: any) {
+      console.error(`❌ Error al actualizar deuda ${debtId}:`, error);
+      throw error;
+    }
   }
 }
 

@@ -52,6 +52,11 @@ export class SupplierController {
   async getById(req: Request, res: Response, next: NextFunction) {
     try {
       const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        throw new AppError('ID de proveedor inválido', 400);
+      }
+
       const supplier = await supplierService.getSupplierById(id);
 
       if (!supplier) {
@@ -70,12 +75,36 @@ export class SupplierController {
   async update(req: Request, res: Response, next: NextFunction) {
     try {
       const id = parseInt(req.params.id);
+      
+      if (isNaN(id)) {
+        throw new AppError('ID de proveedor inválido', 400);
+      }
+
+      console.log(`Actualizando proveedor ${id} con datos:`, req.body);
       const supplier = await supplierService.updateSupplier(id, req.body);
+      console.log(`Proveedor ${id} actualizado exitosamente`);
 
       res.json({
         success: true,
         message: 'Proveedor actualizado exitosamente',
         data: supplier
+      });
+    } catch (error: any) {
+      console.error('Error al actualizar proveedor:', error);
+      next(error);
+    }
+  }
+
+  async delete(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        throw new AppError('ID de proveedor inválido', 400);
+      }
+      await supplierService.deleteSupplier(id);
+      res.json({
+        success: true,
+        message: 'Proveedor eliminado correctamente'
       });
     } catch (error: any) {
       next(error);

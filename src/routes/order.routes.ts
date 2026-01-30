@@ -42,5 +42,48 @@ router.get(
   orderController.getBySupplier.bind(orderController)
 );
 
+router.put(
+  '/:id',
+  validate([
+    param('id').isInt().withMessage('ID inválido'),
+    body('dispatchDate').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const date = new Date(value);
+        if (isNaN(date.getTime())) {
+          throw new Error('La fecha de despacho debe ser una fecha válida');
+        }
+      }
+      return true;
+    }),
+    body('creditDays').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const num = parseInt(value);
+        if (isNaN(num) || num < 1) {
+          throw new Error('Los días de crédito deben ser mayor a 0');
+        }
+      }
+      return true;
+    }),
+    body('amount').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const num = parseFloat(value);
+        if (isNaN(num) || num <= 0) {
+          throw new Error('El monto debe ser un número mayor a 0');
+        }
+      }
+      return true;
+    }),
+    body().custom((value) => {
+      // Validar que al menos uno de los campos esté presente
+      if (!value.dispatchDate && !value.creditDays && !value.amount) {
+        throw new Error('Debe proporcionar al menos dispatchDate, creditDays o amount para actualizar');
+      }
+      return true;
+    })
+  ]),
+  authorize('ADMINISTRADOR', 'SUPERVISOR'),
+  orderController.update.bind(orderController)
+);
+
 export default router;
 

@@ -1,8 +1,8 @@
 // Los enums se importan del cliente generado de Prisma
 // Si hay error, ejecutar: npm run prisma:generate
-type SupplierStatus = 'ACTIVE' | 'INACTIVE';
-type DebtStatus = 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE';
-type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
+export type SupplierStatus = 'PENDING' | 'COMPLETED';
+export type DebtStatus = 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE';
+export type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
 
 // Auth Types
 export interface LoginDTO {
@@ -61,6 +61,12 @@ export interface CreateOrderDTO {
   creditDays: number;
 }
 
+export interface UpdateOrderDTO {
+  dispatchDate?: Date | string;
+  creditDays?: number;
+  amount?: number;
+}
+
 export interface OrderResponse {
   id: number;
   supplierId: number;
@@ -90,6 +96,11 @@ export interface OrderResponse {
 }
 
 // Debt Types
+export interface UpdateDebtDTO {
+  initialAmount?: number;
+  dueDate?: Date | string;
+}
+
 export interface DebtResponse {
   id: number;
   orderId: number;
