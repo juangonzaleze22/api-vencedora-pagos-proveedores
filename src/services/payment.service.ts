@@ -6,6 +6,7 @@ import {
   PaginatedResponse,
   VerifyZelleDTO
 } from '../types';
+import { AppError } from '../middleware/error.middleware';
 import { DebtService } from './debt.service';
 import { SupplierService } from './supplier.service';
 import { env } from '../config/env';
@@ -130,6 +131,20 @@ export class PaymentService {
       if ((paymentMethod === 'ZELLE' || paymentMethod === 'TRANSFER') && !confirmationNumber) {
         console.error('❌ ConfirmationNumber requerido para:', paymentMethod);
         throw new Error('Número de confirmación requerido para este método de pago');
+      }
+
+      // Validar que el número de confirmación no esté duplicado (solo si se envía)
+      const confirmationTrimmed = confirmationNumber?.trim();
+      if (confirmationTrimmed) {
+        const existingWithSameConfirmation = await prisma.payment.findFirst({
+          where: {
+            confirmationNumber: confirmationTrimmed,
+            deletedAt: null
+          }
+        });
+        if (existingWithSameConfirmation) {
+          throw new AppError('Ya existe un pago con este número de confirmación', 400);
+        }
       }
 
       console.log('💾 Creando pago en BD...');
@@ -990,6 +1005,23 @@ export class PaymentService {
           // Si no se proporciona, verificar que el pago actual ya tenga uno
           if (!oldPayment.confirmationNumber) {
             throw new Error('Número de confirmación requerido para este método de pago');
+          }
+        }
+      }
+
+      // 4.1 Validar que el número de confirmación no esté duplicado (si se está actualizando)
+      if (data.confirmationNumber !== undefined) {
+        const confirmationTrimmed = (data.confirmationNumber || '').trim();
+        if (confirmationTrimmed) {
+          const existingWithSameConfirmation = await prisma.payment.findFirst({
+            where: {
+              confirmationNumber: confirmationTrimmed,
+              id: { not: paymentId },
+              deletedAt: null
+            }
+          });
+          if (existingWithSameConfirmation) {
+            throw new AppError('Ya existe un pago con este número de confirmación', 400);
           }
         }
       }

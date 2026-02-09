@@ -12,7 +12,7 @@ import { AppError } from '../middleware/error.middleware';
 
 export class SupplierService {
   async createSupplier(data: CreateSupplierDTO, userId: number): Promise<SupplierResponse> {
-    const { companyName, taxId, phone, status, initialDebtAmount, debtDate, creditDays } = data;
+    const { companyName, taxId, email, phone, status, initialDebtAmount, debtDate, creditDays } = data;
 
     // Validar que el taxId sea único
     const existingSupplier = await prisma.supplier.findUnique({
@@ -36,6 +36,7 @@ export class SupplierService {
       data: {
         companyName,
         taxId,
+        email: email?.trim() || null,
         phone,
         status: (status as SupplierStatus) || initialStatus,
         totalDebt: debtAmount
@@ -158,6 +159,7 @@ export class SupplierService {
     const hasChanges = 
       (data.companyName !== undefined && data.companyName !== supplier.companyName) ||
       (data.taxId !== undefined && data.taxId !== supplier.taxId) ||
+      (data.email !== undefined && (data.email?.trim() ?? null) !== (supplier.email ?? null)) ||
       (data.phone !== undefined && data.phone !== supplier.phone) ||
       (data.status !== undefined && data.status !== supplier.status);
 
@@ -198,6 +200,10 @@ export class SupplierService {
     if (data.phone !== undefined) {
       // Permitir null o string vacío para limpiar el teléfono
       updateData.phone = data.phone === null || data.phone === '' ? null : data.phone.trim();
+    }
+
+    if (data.email !== undefined) {
+      updateData.email = data.email === null || data.email === '' ? null : data.email.trim();
     }
 
     if (data.status !== undefined) {
@@ -286,6 +292,7 @@ export class SupplierService {
       id: supplier.id,
       companyName: supplier.companyName,
       taxId: supplier.taxId,
+      email: supplier.email ?? null,
       phone: supplier.phone,
       status: supplier.status,
       totalDebt: Number(supplier.totalDebt),
