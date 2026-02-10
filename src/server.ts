@@ -19,7 +19,7 @@ import { env } from './config/env';
 import { logger } from './utils/logger';
 import prisma from './config/database';
 
-const PORT = env.PORT;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Función para iniciar el servidor
 async function startServer() {
