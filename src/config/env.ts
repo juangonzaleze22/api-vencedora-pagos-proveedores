@@ -17,7 +17,6 @@ function validateEnv(): EnvConfig {
   const requiredEnvVars = [
     'DATABASE_URL',
     'JWT_SECRET',
-    'PORT'
   ];
 
   const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
