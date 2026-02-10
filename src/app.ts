@@ -44,6 +44,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Ruta raíz (evita 404 cuando alguien visita /)
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'API de pagos a proveedores',
+    health: '/health',
+    api: '/api'
+  });
+});
+
 // Ruta de salud (sin autenticación)
 app.get('/health', (req, res) => {
   res.json({
