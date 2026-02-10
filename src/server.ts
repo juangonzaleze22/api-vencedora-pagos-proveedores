@@ -14,8 +14,9 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Importar después de los handlers de errores
-import app from './app';
+// Cargar env PRIMERO para que dotenv y DATABASE_URL estén en process.env antes de Prisma
 import { env } from './config/env';
+import app from './app';
 import { logger } from './utils/logger';
 import prisma from './config/database';
 

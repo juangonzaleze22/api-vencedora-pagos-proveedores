@@ -14,7 +14,7 @@ interface EnvConfig {
 }
 
 function validateEnv(): EnvConfig {
-  return {
+  const config = {
     PORT: parseInt(process.env.PORT || '3000', 10),
     NODE_ENV: process.env.NODE_ENV || 'development',
     DATABASE_URL: process.env.DATABASE_URL || '',
@@ -22,8 +22,14 @@ function validateEnv(): EnvConfig {
     JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '24h',
     MAX_FILE_SIZE: parseInt(process.env.MAX_FILE_SIZE || '5242880', 10), // 5MB por defecto
     UPLOAD_PATH: process.env.UPLOAD_PATH || './uploads',
-    API_BASE_URL: process.env.API_BASE_URL, // Opcional: si no está, se usa URL relativa
+    API_BASE_URL: process.env.API_BASE_URL,
   };
+
+  // Asegurar que Prisma y el resto del código vean las variables en process.env
+  if (!process.env.DATABASE_URL) process.env.DATABASE_URL = config.DATABASE_URL;
+  if (!process.env.JWT_SECRET) process.env.JWT_SECRET = config.JWT_SECRET;
+
+  return config;
 }
 
 export const env = validateEnv();
