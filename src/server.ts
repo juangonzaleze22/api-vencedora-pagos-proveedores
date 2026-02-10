@@ -32,7 +32,7 @@ async function startServer() {
     console.log('✅ Conexión a la base de datos establecida');
 
     // Iniciar servidor (escuchar en todas las interfaces)
-    app.listen(PORT, '0.0.0.0', () => {
+    app.listen(PORT, () => {
       console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
       console.log(`📝 Ambiente: ${env.NODE_ENV}`);
       console.log(`🔗 Health check: http://localhost:${PORT}/health`);
