@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon",
-    "build": "npx rimraf dist && npx prisma generate && npx prisma db push && tsc && npx prisma db seed",
+    "build": "npx rimraf dist && npx prisma generate && npx prisma db push && tsc",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

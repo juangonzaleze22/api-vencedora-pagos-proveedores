@@ -54,6 +54,9 @@ app.get('/', (req, res) => {
   });
 });
 
+// Favicon: responde 204 para no llenar logs de 404
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 // Ruta de salud (sin autenticación)
 app.get('/health', (req, res) => {
   res.json({
