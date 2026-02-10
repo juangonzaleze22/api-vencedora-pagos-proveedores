@@ -21,6 +21,8 @@ import prisma from './config/database';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+console.log('PORT ==>>', PORT);
+
 // Función para iniciar el servidor
 async function startServer() {
   try {
