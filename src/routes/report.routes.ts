@@ -17,7 +17,7 @@ router.use(authenticate);
 
 router.get(
   '/dashboard',
-  authorize('ADMINISTRADOR', 'SUPERVISOR'),
+  authorize('ADMINISTRADOR', 'SUPERVISOR', 'CAJERO'),
   reportController.getDashboard.bind(reportController)
 );
 

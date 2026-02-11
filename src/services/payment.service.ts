@@ -1484,7 +1484,12 @@ export class PaymentService {
       const paymentMethodText = paymentMethodMap[updatedPayment.paymentMethod] || updatedPayment.paymentMethod;
 
       // Construir el mensaje siguiendo el formato exacto del ejemplo
-      let message = `📄 *Comprobante de Pago*\n\n`;
+      let message = ``;
+      if (receiptFileUrl) {
+        message += `${receiptFileUrl} \n\n`;
+      }
+
+      message += `📄 *Comprobante de Pago*\n\n`;
       message += `*Proveedor:* ${updatedPayment.supplier.companyName}\n`;
       message += `*RIF:* ${updatedPayment.supplier.taxId}\n`;
       message += `*Monto:* $${amount}\n`;
@@ -1501,10 +1506,7 @@ export class PaymentService {
 
       // Si hay comprobante, agregar la URL al mensaje
       // Nota: buildReceiptUrl ya maneja la construcción de la URL completa si API_BASE_URL está configurada
-      if (receiptFileUrl) {
-        message += `\n📎 *Comprobante:* ${receiptFileUrl}`;
-      }
-
+      
       // Limpiar el número de teléfono (remover espacios, guiones, etc.)
       const telefono = updatedPayment.supplier.phone.replace(/[\s\-\(\)]/g, '');
       

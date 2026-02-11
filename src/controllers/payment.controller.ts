@@ -323,11 +323,15 @@ export class PaymentController {
     }
   }
 
+  /**
+   * Sirve el archivo del comprobante. Endpoint PÚBLICO (sin auth) para que
+   * el crawler de WhatsApp pueda leer la imagen y mostrar la vista previa.
+   * Responde con Content-Type: image/jpeg | image/png | etc. según extensión.
+   */
   async getReceipt(req: Request, res: Response, next: NextFunction) {
     try {
       const id = parseInt(req.params.id);
-      
-      // Obtener el pago directamente de la BD para obtener el nombre del archivo
+
       const payment = await prisma.payment.findUnique({
         where: { id },
         select: { receiptFile: true }
@@ -341,53 +345,43 @@ export class PaymentController {
         throw new AppError('No hay comprobante disponible para este pago', 404);
       }
 
-      // El receiptFile en la BD contiene el nombre del archivo (ej: receipt-1234567890.pdf)
-      // Construir la ruta completa del archivo (está en la subcarpeta receipt/)
       const { env } = await import('../config/env');
       const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', payment.receiptFile);
 
-      console.log('🔍 Buscando archivo en:', filePath);
-      
       if (!fs.existsSync(filePath)) {
         console.error(`❌ Archivo no encontrado en: ${filePath}`);
         throw new AppError('Archivo de comprobante no encontrado', 404);
       }
 
-      // Determinar el tipo MIME del archivo según la extensión
       const ext = path.extname(filePath).toLowerCase();
       const mimeTypes: { [key: string]: string } = {
         '.pdf': 'application/pdf',
         '.png': 'image/png',
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif'
+        '.gif': 'image/gif',
+        '.webp': 'image/webp'
       };
-
+      // Para imágenes usar siempre el tipo correcto (WhatsApp crawler lo exige)
       const contentType = mimeTypes[ext] || 'application/octet-stream';
-      
-      console.log('✅ Enviando archivo:', {
-        filePath,
-        contentType,
-        fileName: payment.receiptFile
-      });
-      
-      // Configurar headers para la visualización de imágenes
+
+      // Headers necesarios para que WhatsApp muestre la vista previa del enlace:
+      // - Content-Type exacto (image/jpeg, image/png, etc.)
+      // - Sin autenticación (ruta pública)
+      // - Query ?v=... en la URL ya sirve como token de versión/caché
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `inline; filename="${payment.receiptFile}"`);
-      
-      // Headers CORS adicionales para permitir carga de imágenes desde el frontend
-      const origin = req.headers.origin;
-      if (origin) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-      } else {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-      }
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate'); // Cache por 1 hora con revalidación
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
       res.setHeader('ETag', `"${payment.receiptFile}"`);
-      
-      // Usar sendFile con ruta absoluta
-      res.sendFile(path.resolve(filePath));
+      const origin = req.headers.origin;
+      res.setHeader('Access-Control-Allow-Origin', origin || '*');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+      // Pasar Content-Type en options para que sendFile no lo sobrescriba
+      res.sendFile(path.resolve(filePath), {
+        headers: { 'Content-Type': contentType }
+      });
     } catch (error: any) {
       next(error);
     }

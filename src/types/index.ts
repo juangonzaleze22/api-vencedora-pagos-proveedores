@@ -26,7 +26,7 @@ export interface AuthResponse {
 // Supplier Types
 export interface CreateSupplierDTO {
   companyName: string;
-  taxId: string;
+  taxId?: string;
   email?: string;
   phone?: string;
   status?: SupplierStatus;
@@ -46,7 +46,7 @@ export interface UpdateSupplierDTO {
 export interface SupplierResponse {
   id: number;
   companyName: string;
-  taxId: string;
+  taxId: string | null;
   email: string | null;
   phone: string | null;
   status: SupplierStatus;
@@ -76,7 +76,7 @@ export interface OrderResponse {
   supplier: {
     id: number;
     companyName: string;
-    taxId: string;
+    taxId: string | null;
     phone: string | null;
   };
   amount: number;
@@ -111,7 +111,7 @@ export interface DebtResponse {
   supplier: {
     id: number;
     companyName: string;
-    taxId: string;
+    taxId: string | null;
     phone: string | null;
   };
   initialAmount: number;
@@ -145,7 +145,7 @@ export interface PaymentResponse {
   supplier: {
     id: number;
     companyName: string;
-    taxId: string;
+    taxId: string | null;
     phone: string | null;
   };
   amount: number;

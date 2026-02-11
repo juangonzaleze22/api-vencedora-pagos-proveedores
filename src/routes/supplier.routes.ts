@@ -14,7 +14,7 @@ router.post(
   '/',
   validate([
     body('companyName').trim().isLength({ min: 3 }).withMessage('El nombre de la empresa debe tener al menos 3 caracteres'),
-    body('taxId').notEmpty().withMessage('RIF/Identificación Fiscal es requerido'),
+    body('taxId').optional().trim().notEmpty().withMessage('El RIF/Identificación Fiscal no puede estar vacío'),
     body('email').optional().trim().isEmail().withMessage('El email debe ser válido'),
     body('phone').optional().trim().isString().withMessage('El teléfono debe ser una cadena de texto')
   ]),

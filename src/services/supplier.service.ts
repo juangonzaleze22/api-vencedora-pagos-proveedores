@@ -14,13 +14,14 @@ export class SupplierService {
   async createSupplier(data: CreateSupplierDTO, userId: number): Promise<SupplierResponse> {
     const { companyName, taxId, email, phone, status, initialDebtAmount, debtDate, creditDays } = data;
 
-    // Validar que el taxId sea único
-    const existingSupplier = await prisma.supplier.findUnique({
-      where: { taxId }
-    });
-
-    if (existingSupplier) {
-      throw new Error('Ya existe un proveedor con este RIF/Identificación Fiscal');
+    // Validar que el taxId sea único solo si se proporciona
+    if (taxId != null && taxId !== '') {
+      const existingSupplier = await prisma.supplier.findUnique({
+        where: { taxId: taxId.trim() }
+      });
+      if (existingSupplier) {
+        throw new Error('Ya existe un proveedor con este RIF/Identificación Fiscal');
+      }
     }
 
     // Convertir initialDebtAmount a número si viene como string
@@ -35,7 +36,7 @@ export class SupplierService {
     const supplier = await prisma.supplier.create({
       data: {
         companyName,
-        taxId,
+        taxId: taxId != null && taxId !== '' ? taxId.trim() : null,
         email: email?.trim() || null,
         phone,
         status: (status as SupplierStatus) || initialStatus,
@@ -100,9 +101,10 @@ export class SupplierService {
     const where: any = {};
 
     if (search) {
+      // MySQL no soporta mode: 'insensitive'; la búsqueda es case-sensitive
       where.OR = [
-        { companyName: { contains: search, mode: 'insensitive' } },
-        { taxId: { contains: search, mode: 'insensitive' } }
+        { companyName: { contains: search } },
+        { taxId: { contains: search } }
       ];
     }
 
@@ -167,19 +169,16 @@ export class SupplierService {
       throw new AppError('No se han realizado cambios en el proveedor', 400);
     }
 
-    // Si se actualiza el taxId, verificar que sea único
+    // Si se actualiza el taxId, verificar que sea único cuando tiene valor
     if (data.taxId !== undefined && data.taxId !== supplier.taxId) {
-      // Validar que el taxId no esté vacío
-      if (!data.taxId || data.taxId.trim() === '') {
-        throw new AppError('El RIF/Identificación Fiscal no puede estar vacío', 400);
-      }
-
-      const existingSupplier = await prisma.supplier.findUnique({
-        where: { taxId: data.taxId.trim() }
-      });
-
-      if (existingSupplier) {
-        throw new AppError('Ya existe un proveedor con este RIF/Identificación Fiscal', 400);
+      const newTaxId = data.taxId === null || data.taxId === '' ? null : data.taxId.trim();
+      if (newTaxId !== null) {
+        const existingSupplier = await prisma.supplier.findUnique({
+          where: { taxId: newTaxId }
+        });
+        if (existingSupplier) {
+          throw new AppError('Ya existe un proveedor con este RIF/Identificación Fiscal', 400);
+        }
       }
     }
 
@@ -194,7 +193,7 @@ export class SupplierService {
     }
 
     if (data.taxId !== undefined) {
-      updateData.taxId = data.taxId.trim();
+      updateData.taxId = data.taxId === null || data.taxId === '' ? null : data.taxId.trim();
     }
 
     if (data.phone !== undefined) {
@@ -291,7 +290,7 @@ export class SupplierService {
     return {
       id: supplier.id,
       companyName: supplier.companyName,
-      taxId: supplier.taxId,
+      taxId: supplier.taxId ?? null,
       email: supplier.email ?? null,
       phone: supplier.phone,
       status: supplier.status,

@@ -50,7 +50,7 @@ enum PaymentMethod {
 model Supplier {
   id              Int       @id @default(autoincrement())
   companyName     String
-  taxId           String    @unique
+  taxId           String?   @unique
   email           String?
   phone           String?
   status          SupplierStatus @default(PENDING)

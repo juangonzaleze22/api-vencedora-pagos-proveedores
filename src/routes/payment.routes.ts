@@ -19,8 +19,9 @@ router.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Endpoint público para obtener comprobantes (no requiere autenticación para imágenes)
-// IMPORTANTE: Debe estar ANTES de router.use(authenticate) y sin validación estricta
+// Endpoint PÚBLICO del comprobante (sin auth). Debe permanecer público para que
+// el crawler de WhatsApp pueda GET la imagen y mostrar la vista previa (Content-Type: image/jpeg/png).
+// La URL incluye ?v=... como token de versión; no usar auth en esta ruta.
 router.get(
   '/:id/receipt',
   async (req: Request, res: Response, next: NextFunction) => {
