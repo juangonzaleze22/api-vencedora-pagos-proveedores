@@ -1491,8 +1491,17 @@ export class PaymentService {
 
       message += `📄 *Comprobante de Pago*\n\n`;
       message += `*Proveedor:* ${updatedPayment.supplier.companyName}\n`;
-      message += `*RIF:* ${updatedPayment.supplier.taxId}\n`;
       message += `*Monto:* $${amount}\n`;
+      if (updatedPayment.exchangeRate != null) {
+        const formatVES = (value: number, decimals: number) =>
+          new Intl.NumberFormat('es-VE', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(value);
+        const tasaNum = Number(updatedPayment.exchangeRate);
+        const montoBsNum = updatedPayment.amountInBolivares != null
+          ? Number(updatedPayment.amountInBolivares)
+          : Number(updatedPayment.amount) * tasaNum;
+        message += `*Tasa:* ${formatVES(tasaNum, 2)}\n`;
+        message += `*Monto en Bs:* ${formatVES(montoBsNum, 2)}\n`;
+      }
       message += `*Método de Pago:* ${paymentMethodText}\n`;
       message += `*Fecha de Pago:* ${paymentDate}\n`;
       

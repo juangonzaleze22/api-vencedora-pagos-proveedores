@@ -1,6 +1,15 @@
+import path from 'path';
 import dotenv from 'dotenv';
 
-dotenv.config();
+// Cargar .env desde la raíz del proyecto (carpeta que contiene /dist), no desde process.cwd().
+// Así se carga igual en local y en el servidor aunque el proceso arranque desde otro directorio.
+const projectRoot = path.resolve(__dirname, '..', '..');
+const envPath = path.join(projectRoot, '.env');
+const result = dotenv.config({ path: envPath });
+
+if (result.error && process.env.NODE_ENV !== 'test') {
+  console.warn(`⚠️ No se encontró .env en ${envPath} (se usan variables de entorno del sistema)`);
+}
 
 interface EnvConfig {
   PORT: number;
@@ -24,6 +33,13 @@ function validateEnv(): EnvConfig {
     UPLOAD_PATH: process.env.UPLOAD_PATH || './uploads',
     API_BASE_URL: process.env.API_BASE_URL,
   };
+
+  if (!config.DATABASE_URL || config.DATABASE_URL.trim() === '') {
+    const msg =
+      'DATABASE_URL no está definida. En el servidor, crea un archivo .env en la carpeta desde donde ejecutas la app (ej. public_html) con DATABASE_URL="mysql://usuario:contraseña@host:3306/nombre_bd", o configura la variable en el panel del hosting.';
+    console.error('❌ ' + msg);
+    throw new Error(msg);
+  }
 
   // Asegurar que Prisma y el resto del código vean las variables en process.env
   if (!process.env.DATABASE_URL) process.env.DATABASE_URL = config.DATABASE_URL;
