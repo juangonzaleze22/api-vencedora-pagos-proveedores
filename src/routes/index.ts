@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRoutes from './auth.routes';
+import userRoutes from './user.routes';
 import supplierRoutes from './supplier.routes';
 import orderRoutes from './order.routes';
 import debtRoutes from './debt.routes';
@@ -9,6 +10,7 @@ import reportRoutes from './report.routes';
 const router = Router();
 
 router.use('/auth', authRoutes);
+router.use('/users', userRoutes);
 router.use('/suppliers', supplierRoutes);
 router.use('/orders', orderRoutes);
 router.use('/debts', debtRoutes);

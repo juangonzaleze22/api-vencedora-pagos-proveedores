@@ -32,6 +32,7 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
     'image/jpeg',
     'image/png',
     'image/gif',
+    'image/webp',
     'application/pdf',
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

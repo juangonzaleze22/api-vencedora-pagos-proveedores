@@ -105,7 +105,8 @@ model Payment {
   senderEmail       String?
   confirmationNumber String?
   paymentDate       DateTime
-  receiptFile       String?
+  receiptFile       String?       // legacy: una sola imagen (mantener por compatibilidad)
+  receiptFiles      Json?        // array de nombres de archivo para múltiples imágenes
   verified          Boolean       @default(false)
   shared            Boolean       @default(false)
   sharedAt         DateTime?

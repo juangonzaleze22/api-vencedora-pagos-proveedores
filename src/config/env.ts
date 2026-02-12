@@ -1,14 +1,28 @@
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 
-// Cargar .env desde la raíz del proyecto (carpeta que contiene /dist), no desde process.cwd().
-// Así se carga igual en local y en el servidor aunque el proceso arranque desde otro directorio.
+// Cargar .env: primero desde la raíz del proyecto (carpeta que contiene /dist), luego desde process.cwd()
 const projectRoot = path.resolve(__dirname, '..', '..');
-const envPath = path.join(projectRoot, '.env');
-const result = dotenv.config({ path: envPath });
-
-if (result.error && process.env.NODE_ENV !== 'test') {
-  console.warn(`⚠️ No se encontró .env en ${envPath} (se usan variables de entorno del sistema)`);
+const envPaths = [
+  path.join(projectRoot, '.env'),
+  path.join(process.cwd(), '.env'),
+];
+let loaded = false;
+for (const envPath of envPaths) {
+  if (fs.existsSync(envPath)) {
+    const result = dotenv.config({ path: envPath });
+    if (!result.error) {
+      loaded = true;
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`✅ .env cargado desde ${envPath}`);
+      }
+      break;
+    }
+  }
+}
+if (!loaded && process.env.NODE_ENV !== 'test') {
+  console.warn(`⚠️ No se encontró .env en: ${envPaths.join(' ni en ')}. Se usan variables del sistema.`);
 }
 
 interface EnvConfig {

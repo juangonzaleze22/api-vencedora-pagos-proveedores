@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ReportService } from '../services/report.service';
 import { AppError } from '../middleware/error.middleware';
+import { generateSupplierPaymentsPdf } from '../utils/pdfGenerator';
 
 const reportService = new ReportService();
 
@@ -70,27 +71,30 @@ export class ReportController {
   async exportReport(req: Request, res: Response, next: NextFunction) {
     try {
       const supplierId = parseInt(req.params.supplierId);
-      
-      // Obtener parámetros de fecha del query string
-      const startDate = req.query.startDate 
-        ? new Date(req.query.startDate as string) 
+      if (isNaN(supplierId)) {
+        throw new AppError('ID de proveedor inválido', 400);
+      }
+
+      const startDate = req.query.startDate
+        ? new Date(req.query.startDate as string)
         : undefined;
-      const endDate = req.query.endDate 
-        ? new Date(req.query.endDate as string) 
+      const endDate = req.query.endDate
+        ? new Date(req.query.endDate as string)
         : undefined;
 
-      const report = await reportService.getSupplierDetailedReport(
+      const data = await reportService.getSupplierPaymentReportData(
         supplierId,
         startDate,
         endDate
       );
 
-      // Por ahora retornamos JSON, en el futuro se puede implementar PDF/Excel
-      res.json({
-        success: true,
-        message: 'Reporte generado exitosamente',
-        data: report
-      });
+      const safeName = data.supplier.companyName.replace(/[^a-zA-Z0-9\s-]/g, '').replace(/\s+/g, '-') || 'proveedor';
+      const filename = `reporte-pagos-${safeName}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+      generateSupplierPaymentsPdf(data, res);
     } catch (error: any) {
       next(error);
     }

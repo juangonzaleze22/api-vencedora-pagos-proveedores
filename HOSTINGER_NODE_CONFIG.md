@@ -41,8 +41,32 @@ Si no hay carpeta `dist` o no está `server.js`, el deploy no ha compilado bien.
 
 y que el **Application root** apunte a la carpeta que **contiene** a `dist` (normalmente `public_html`).
 
+## Variables de entorno y archivo `.env`
+
+Si ves en los logs:
+
+- `No se encontró .env en .../public_html/.env`
+- `DATABASE_URL no está definida`
+
+debes **crear el archivo `.env` en el servidor** dentro de la carpeta del proyecto (la misma que contiene `dist/`), por ejemplo `public_html/.env`.
+
+1. En el **Administrador de archivos** de Hostinger, entra en `public_html`.
+2. Crea un archivo llamado exactamente `.env` (con el punto delante).
+3. Dentro del archivo, añade al menos (sustituye por tus datos de MySQL de Hostinger):
+
+   ```env
+   DATABASE_URL="mysql://USUARIO:CONTRASEÑA@HOST:3306/NOMBRE_BD"
+   ```
+
+   Los datos (usuario, contraseña, host, nombre de BD) los ves en el panel de Hostinger en **Bases de datos MySQL** / tu base de datos.
+
+4. Guarda el archivo y reinicia la aplicación Node.js.
+
+Si tu plan de Hostinger permite **Variables de entorno** en la configuración de la app Node.js, también puedes definir ahí `DATABASE_URL` en lugar de usar `.env`.
+
 ## Resumen
 
 1. **Application root**: carpeta del proyecto, **sin** `/` al final (ej: `public_html`).
 2. **Entry file**: `dist/server.js`, **sin** `/` al inicio.
-3. Tras cambiar, guardar y reiniciar la aplicación Node.js en el panel.
+3. **Archivo `.env`**: crear en `public_html/.env` con `DATABASE_URL` (o configurar la variable en el panel).
+4. Tras cambiar, guardar y reiniciar la aplicación Node.js en el panel.

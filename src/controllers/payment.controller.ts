@@ -4,6 +4,7 @@ import { AppError } from '../middleware/error.middleware';
 import path from 'path';
 import fs from 'fs';
 import prisma from '../config/database';
+import { getReceiptFileNames, parseReceiptFilenameFromUrl } from '../utils/receiptUrls';
 
 const paymentService = new PaymentService();
 
@@ -28,11 +29,9 @@ export class PaymentController {
         exchangeRateType: typeof req.body.exchangeRate,
         amountInBolivaresType: typeof req.body.amountInBolivares
       });
-      console.log('Archivo recibido:', req.file ? {
-        filename: req.file.filename,
-        path: req.file.path,
-        size: req.file.size
-      } : 'Ninguno');
+      const files = (req as any).files as Express.Multer.File[] | undefined;
+      const fileList = Array.isArray(files) ? files : [];
+      console.log('Archivos recibidos:', fileList.length, fileList.map((f: any) => ({ filename: f.filename, path: f.path, size: f.size })));
 
       // Validar que los campos requeridos estén presentes
       if (!req.body.debtId || !req.body.supplierId || !req.body.amount) {
@@ -57,6 +56,9 @@ export class PaymentController {
         amountInBolivaresIsValid: amountInBolivaresValue !== undefined && !isNaN(amountInBolivaresValue)
       });
 
+      // cashierId: si se envía, se usa como createdBy; si no, se usa el usuario autenticado
+      const cashierId = req.body.cashierId ? parseInt(req.body.cashierId) : undefined;
+
       const paymentData = {
         debtId: parseInt(req.body.debtId),
         supplierId: parseInt(req.body.supplierId),
@@ -67,25 +69,22 @@ export class PaymentController {
         confirmationNumber: req.body.confirmationNumber || undefined,
         paymentDate: req.body.paymentDate,
         exchangeRate: exchangeRateValue,
-        amountInBolivares: amountInBolivaresValue
+        amountInBolivares: amountInBolivaresValue,
+        cashierId
       };
 
-      // Guardar solo el nombre del archivo (se construirá la URL después de crear el pago)
-      const receiptFileName = req.file ? req.file.filename : undefined;
-      const receiptFilePath = req.file ? req.file.path : undefined;
+      // Múltiples imágenes: array de nombres y rutas (se construyen las URLs en el servicio)
+      const receiptFileNames = fileList.map((f: any) => f.filename);
+      const receiptFilePaths = fileList.map((f: any) => f.path);
 
       console.log('📝 Datos del pago a procesar:', paymentData);
-      console.log('📎 Archivo recibido:', req.file ? {
-        filename: req.file.filename,
-        originalname: req.file.originalname,
-        path: req.file.path
-      } : 'Ninguno');
+      console.log('📎 Imágenes recibidas:', receiptFileNames.length, receiptFileNames);
 
       const payment = await paymentService.createPayment(
         paymentData,
         req.user.userId,
-        receiptFileName,
-        receiptFilePath
+        receiptFileNames,
+        receiptFilePaths
       );
 
       console.log('✅ Pago creado exitosamente:', payment.id);
@@ -102,17 +101,21 @@ export class PaymentController {
       console.error('❌ Error en PaymentController.create:', error);
       console.error('Stack:', error?.stack);
       console.error('Error completo:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-      
-      // Si hay un archivo subido y hay error, eliminarlo
-      if (req.file && req.file.path) {
-        try {
-          fs.unlinkSync(req.file.path);
-          console.log('🗑️ Archivo eliminado debido a error');
-        } catch (unlinkError) {
-          console.error('Error al eliminar archivo:', unlinkError);
+
+      const createdFiles = (req as any).files as Express.Multer.File[] | undefined;
+      if (Array.isArray(createdFiles) && createdFiles.length > 0) {
+        for (const file of createdFiles) {
+          try {
+            if (file.path && fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+              console.log('🗑️ Archivo eliminado debido a error:', file.filename);
+            }
+          } catch (unlinkError) {
+            console.error('Error al eliminar archivo:', unlinkError);
+          }
         }
       }
-      
+
       // Convertir errores genéricos a AppError si no lo son
       if (!res.headersSent) {
         if (error instanceof AppError) {
@@ -216,6 +219,43 @@ export class PaymentController {
       const includeDeleted = req.query.includeDeleted === 'true';
 
       const result = await paymentService.getPaymentsBySupplier(supplierId, { page, limit, includeDeleted });
+
+      res.json({
+        success: true,
+        data: result.data,
+        pagination: result.pagination
+      });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+
+  async getByCashier(req: Request, res: Response, next: NextFunction) {
+    try {
+      const cashierId = parseInt(req.params.cashierId);
+      const page = req.query.page ? parseInt(req.query.page as string) : undefined;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const includeDeleted = req.query.includeDeleted === 'true';
+      const startDate = req.query.startDate
+        ? new Date(req.query.startDate as string)
+        : undefined;
+      const endDate = req.query.endDate
+        ? new Date(req.query.endDate as string)
+        : undefined;
+      const paymentMethod = req.query.paymentMethod as string | undefined;
+
+      if (isNaN(cashierId)) {
+        throw new AppError('ID de cajero inválido', 400);
+      }
+
+      const result = await paymentService.getPaymentsByCashier(cashierId, {
+        page,
+        limit,
+        includeDeleted,
+        startDate,
+        endDate,
+        paymentMethod
+      });
 
       res.json({
         success: true,
@@ -331,22 +371,32 @@ export class PaymentController {
   async getReceipt(req: Request, res: Response, next: NextFunction) {
     try {
       const id = parseInt(req.params.id);
+      const filenameParam = req.params.filename; // presente en GET /:id/receipt/:filename
 
       const payment = await prisma.payment.findUnique({
         where: { id },
-        select: { receiptFile: true }
+        select: { receiptFile: true, receiptFiles: true }
       });
 
       if (!payment) {
         throw new AppError('Pago no encontrado', 404);
       }
 
-      if (!payment.receiptFile) {
+      const fileNames = getReceiptFileNames(payment);
+
+      if (fileNames.length === 0) {
         throw new AppError('No hay comprobante disponible para este pago', 404);
       }
 
+      const fileNameToServe = filenameParam
+        ? (fileNames.includes(filenameParam) ? filenameParam : null)
+        : fileNames[0];
+      if (!fileNameToServe) {
+        throw new AppError('Archivo de comprobante no encontrado', 404);
+      }
+
       const { env } = await import('../config/env');
-      const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', payment.receiptFile);
+      const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', fileNameToServe);
 
       if (!fs.existsSync(filePath)) {
         console.error(`❌ Archivo no encontrado en: ${filePath}`);
@@ -362,23 +412,17 @@ export class PaymentController {
         '.gif': 'image/gif',
         '.webp': 'image/webp'
       };
-      // Para imágenes usar siempre el tipo correcto (WhatsApp crawler lo exige)
       const contentType = mimeTypes[ext] || 'application/octet-stream';
 
-      // Headers necesarios para que WhatsApp muestre la vista previa del enlace:
-      // - Content-Type exacto (image/jpeg, image/png, etc.)
-      // - Sin autenticación (ruta pública)
-      // - Query ?v=... en la URL ya sirve como token de versión/caché
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${payment.receiptFile}"`);
+      res.setHeader('Content-Disposition', `inline; filename="${fileNameToServe}"`);
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
-      res.setHeader('ETag', `"${payment.receiptFile}"`);
+      res.setHeader('ETag', `"${fileNameToServe}"`);
       const origin = req.headers.origin;
       res.setHeader('Access-Control-Allow-Origin', origin || '*');
       res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-      // Pasar Content-Type en options para que sendFile no lo sobrescriba
       res.sendFile(path.resolve(filePath), {
         headers: { 'Content-Type': contentType }
       });
@@ -439,21 +483,30 @@ export class PaymentController {
         updateData.amountInBolivares = req.body.amountInBolivares ? parseFloat(req.body.amountInBolivares) : null;
       }
 
-      // Manejar el comprobante (archivo nuevo o remover existente)
-      if (req.file) {
-        // Si hay archivo nuevo, actualizar con el nuevo archivo
-        updateData.receiptFileName = req.file.filename;
-        updateData.receiptFilePath = req.file.path;
+      // Manejar comprobantes: archivos nuevos, remover todas, o conservar/actualizar lista (existingReceiptFiles = URLs)
+      const updateFiles = (req as any).files as Express.Multer.File[] | undefined;
+      const fileList = Array.isArray(updateFiles) ? updateFiles : [];
+      if (fileList.length > 0) {
+        updateData.receiptFileNames = fileList.map((f: any) => f.filename);
+        updateData.receiptFilePaths = fileList.map((f: any) => f.path);
       } else if (req.body.removeReceipt === 'true' || req.body.removeReceipt === true) {
-        // Si el usuario quiere remover la imagen, setear a null
-        console.log('🗑️ Usuario quiere remover el comprobante');
-        updateData.receiptFileName = null;
-        updateData.removeReceipt = true; // Flag para eliminar el archivo físico
-      } else if (req.body.receiptFile === '' || req.body.receiptFile === null) {
-        // También permitir remover enviando string vacío o null
-        console.log('🗑️ Usuario quiere remover el comprobante (campo vacío)');
-        updateData.receiptFileName = null;
+        console.log('🗑️ Usuario quiere remover todos los comprobantes');
+        updateData.receiptFileNames = null;
         updateData.removeReceipt = true;
+      } else if (req.body.receiptFiles === '' || req.body.receiptFiles === null) {
+        console.log('🗑️ Usuario quiere remover comprobantes (campo vacío)');
+        updateData.receiptFileNames = null;
+        updateData.removeReceipt = true;
+      } else {
+        // Sin archivos nuevos: el frontend puede enviar existingReceiptFiles (URLs) para conservar/reordenar/eliminar algunas
+        const raw = req.body.existingReceiptFiles;
+        const urlList = Array.isArray(raw) ? raw : raw != null && raw !== '' ? [raw] : [];
+        const fileNamesFromUrls = urlList
+          .map((u: string) => parseReceiptFilenameFromUrl(u))
+          .filter((name: string | null): name is string => name != null);
+        if (fileNamesFromUrls.length > 0) {
+          updateData.existingReceiptFileNames = fileNamesFromUrls;
+        }
       }
 
       const updatedPayment = await paymentService.updatePayment(id, updateData);
@@ -471,16 +524,21 @@ export class PaymentController {
       console.error('❌ Error en PaymentController.update:', error);
       console.error('Stack:', error?.stack);
       
-      // Si hay un archivo subido y hay error, eliminarlo
-      if (req.file && req.file.path) {
-        try {
-          fs.unlinkSync(req.file.path);
-          console.log('🗑️ Archivo eliminado debido a error');
-        } catch (unlinkError) {
-          console.error('Error al eliminar archivo:', unlinkError);
+      // Si hay archivos subidos y hay error, eliminarlos
+      const updateFiles = (req as any).files as Express.Multer.File[] | undefined;
+      if (Array.isArray(updateFiles) && updateFiles.length > 0) {
+        for (const file of updateFiles) {
+          try {
+            if (file.path && fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+              console.log('🗑️ Archivo eliminado debido a error:', file.filename);
+            }
+          } catch (unlinkError) {
+            console.error('Error al eliminar archivo:', unlinkError);
+          }
         }
       }
-      
+
       if (error instanceof AppError) {
         next(error);
       } else {

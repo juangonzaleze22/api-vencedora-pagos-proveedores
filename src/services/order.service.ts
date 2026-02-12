@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { CreateOrderDTO, UpdateOrderDTO, OrderResponse, PaginationParams, PaginatedResponse } from '../types';
 import { SupplierService } from './supplier.service';
 import { AppError } from '../middleware/error.middleware';
+import { getReceiptFileNames, buildReceiptUrls } from '../utils/receiptUrls';
 
 const supplierService = new SupplierService();
 
@@ -169,7 +170,7 @@ export class OrderService {
           senderEmail: p.senderEmail,
           confirmationNumber: p.confirmationNumber,
           paymentDate: p.paymentDate,
-          receiptFile: p.receiptFile,
+          receiptFiles: buildReceiptUrls(p.id, getReceiptFileNames(p)),
           verified: p.verified,
           createdBy: p.createdBy,
           deletedAt: p.deletedAt || null,
@@ -607,7 +608,7 @@ export class OrderService {
             senderEmail: p.senderEmail,
             confirmationNumber: p.confirmationNumber,
             paymentDate: p.paymentDate,
-            receiptFile: p.receiptFile,
+            receiptFiles: buildReceiptUrls(p.id, getReceiptFileNames(p)),
             verified: p.verified,
             createdBy: p.createdBy,
             deletedAt: p.deletedAt || null,

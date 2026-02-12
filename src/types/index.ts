@@ -23,6 +23,16 @@ export interface AuthResponse {
   };
 }
 
+export interface UserResponse {
+  id: number;
+  email: string;
+  nombre: string;
+  rol: {
+    id: number;
+    nombre: string;
+  };
+}
+
 // Supplier Types
 export interface CreateSupplierDTO {
   companyName: string;
@@ -136,6 +146,7 @@ export interface CreatePaymentDTO {
   paymentDate: Date;
   exchangeRate?: number; // Tasa del dólar (opcional, solo para pagos en BS)
   amountInBolivares?: number; // Monto en bolívares (opcional, solo para pagos en BS)
+  cashierId?: number; // ID del cajero que registra el pago (si no se envía, se usa el usuario autenticado)
 }
 
 export interface PaymentResponse {
@@ -154,13 +165,19 @@ export interface PaymentResponse {
   senderEmail: string | null;
   confirmationNumber: string | null;
   paymentDate: Date;
-  receiptFile: string | null;
+  /** URLs completas de las imágenes del comprobante (sincronizar con frontend como `receiptFiles`) */
+  receiptFiles: string[];
   verified: boolean;
   shared: boolean;
   sharedAt: Date | null;
   exchangeRate: number | null; // Tasa del dólar (opcional, solo para pagos en BS)
   amountInBolivares: number | null; // Monto en bolívares (opcional, solo para pagos en BS)
   createdBy: number;
+  createdByUser?: {
+    id: number;
+    nombre: string;
+    email: string;
+  } | null;
   deletedAt?: Date | null;
   deletedBy?: number | null;
   deletedByUser?: {

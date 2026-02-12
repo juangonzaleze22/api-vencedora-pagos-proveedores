@@ -10,6 +10,7 @@ import { AppError } from '../middleware/error.middleware';
 import { DebtService } from './debt.service';
 import { SupplierService } from './supplier.service';
 import { env } from '../config/env';
+import { getReceiptFileNames, buildReceiptUrl, buildReceiptUrls } from '../utils/receiptUrls';
 
 // PaymentMethod type
 type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
@@ -17,50 +18,33 @@ type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
 const debtService = new DebtService();
 const supplierService = new SupplierService();
 
-// Helper function para construir la URL del comprobante
-// Agregar timestamp para evitar caché cuando se actualiza la imagen
-function buildReceiptUrl(paymentId: number, receiptFileName?: string | null): string {
-  const basePath = `/api/payments/${paymentId}/receipt`;
-  
-  // Agregar timestamp basado en el nombre del archivo para invalidar caché
-  // El nombre del archivo ya incluye un timestamp único, pero podemos usar el nombre completo
-  // o agregar un parámetro de query con el timestamp actual
-  let urlWithCache = basePath;
-  if (receiptFileName) {
-    // Extraer el timestamp del nombre del archivo (formato: receipt-TIMESTAMP-RANDOM.ext)
-    const timestampMatch = receiptFileName.match(/receipt-(\d+)-/);
-    if (timestampMatch) {
-      urlWithCache = `${basePath}?v=${timestampMatch[1]}`;
-    } else {
-      // Si no tiene timestamp, usar el nombre del archivo como versión
-      urlWithCache = `${basePath}?v=${encodeURIComponent(receiptFileName)}`;
-    }
-  }
-  
-  // Si está configurada API_BASE_URL, construir URL completa
-  if (env.API_BASE_URL) {
-    // Asegurar que no tenga barra final
-    const baseUrl = env.API_BASE_URL.replace(/\/$/, '');
-    const fullUrl = `${baseUrl}${urlWithCache}`;
-    return fullUrl;
-  }
-  
-  // Si no está configurada, devolver URL relativa con parámetro de versión
-  return urlWithCache;
-}
-
 export class PaymentService {
   async createPayment(
     data: CreatePaymentDTO,
     userId: number,
-    receiptFileName?: string,
-    receiptFilePath?: string
+    receiptFileNames: string[] = [],
+    receiptFilePaths?: string[]
   ): Promise<PaymentResponse> {
     try {
       console.log('💳 PaymentService.createPayment - Iniciando...');
-      console.log('Datos recibidos:', { ...data, receiptFileName, receiptFilePath });
+      console.log('Datos recibidos:', { ...data, receiptFileNames, receiptFilePathsCount: receiptFilePaths?.length });
       
-      const { debtId, supplierId, amount, paymentMethod, senderName, senderEmail, confirmationNumber, paymentDate, exchangeRate, amountInBolivares } = data;
+      const { debtId, supplierId, amount, paymentMethod, senderName, senderEmail, confirmationNumber, paymentDate, exchangeRate, amountInBolivares, cashierId } = data;
+
+      // Determinar el createdBy: si se envía cashierId, validar que existe; si no, usar userId autenticado
+      const effectiveCreatedBy = cashierId || userId;
+
+      if (cashierId) {
+        console.log(`🔍 Validando cajero con ID ${cashierId}...`);
+        const cashierUser = await prisma.usuario.findUnique({
+          where: { id: cashierId },
+          select: { id: true, nombre: true, email: true }
+        });
+        if (!cashierUser) {
+          throw new AppError(`Usuario cajero con ID ${cashierId} no encontrado`, 400);
+        }
+        console.log(`✅ Cajero validado: ${cashierUser.nombre} (${cashierUser.email})`);
+      }
 
       console.log('🔍 Validando deuda...');
       // Validar que la deuda existe y pertenece al proveedor
@@ -154,7 +138,8 @@ export class PaymentService {
       // Pero como aún no tenemos el ID, guardamos el nombre del archivo
       // y luego actualizaremos con la URL completa después de crear el pago
       
-      // Crear el pago
+      // Guardar múltiples imágenes como JSON (receiptFiles); receiptFile se deja null
+      const receiptFilesJson = receiptFileNames.length > 0 ? (receiptFileNames as unknown as object) : null;
       const payment = await prisma.payment.create({
         data: {
           debtId,
@@ -165,11 +150,12 @@ export class PaymentService {
           senderEmail: senderEmail || null,
           confirmationNumber: confirmationNumber || null,
           paymentDate: new Date(paymentDate),
-          receiptFile: receiptFileName ? receiptFileName : null, // Guardar solo el nombre del archivo temporalmente
+          receiptFile: null,
+          receiptFiles: receiptFilesJson,
           exchangeRate: exchangeRate ? exchangeRate : null,
           amountInBolivares: amountInBolivares ? amountInBolivares : null,
           verified: false,
-          createdBy: userId
+          createdBy: effectiveCreatedBy
         },
         include: {
           supplier: {
@@ -179,6 +165,13 @@ export class PaymentService {
               taxId: true,
               phone: true
             }
+          },
+          createdByUser: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
           }
         }
       });
@@ -187,55 +180,38 @@ export class PaymentService {
         paymentId: payment.id,
         amount: Number(payment.amount).toFixed(2),
         debtId: payment.debtId,
-        receiptFile: payment.receiptFile,
+        receiptFiles: payment.receiptFiles,
         exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate).toFixed(4) : null,
         amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares).toFixed(2) : null,
         createdAt: payment.createdAt
       });
 
-      // Verificar que el archivo se guardó correctamente en la BD
-      if (receiptFileName && !payment.receiptFile) {
-        console.error('❌ ERROR: El nombre del archivo no se guardó en la BD');
-        console.error('receiptFileName recibido:', receiptFileName);
-        console.error('receiptFile en BD:', payment.receiptFile);
-        throw new Error('Error: El nombre del archivo no se guardó correctamente en la base de datos');
+      if (receiptFileNames.length > 0 && !payment.receiptFiles) {
+        console.error('❌ ERROR: Los nombres de archivo no se guardaron en la BD');
+        throw new Error('Error: Los archivos no se guardaron correctamente en la base de datos');
       }
 
-      // Verificar que el archivo físico existe si se proporcionó
-      if (receiptFilePath) {
+      if (receiptFilePaths?.length) {
         const fs = await import('fs');
-        if (!fs.existsSync(receiptFilePath)) {
-          console.error('❌ ERROR: El archivo físico no existe en:', receiptFilePath);
-          throw new Error('Error: El archivo no se guardó correctamente en el servidor');
+        for (const p of receiptFilePaths) {
+          if (!fs.existsSync(p)) {
+            console.error('❌ ERROR: El archivo físico no existe en:', p);
+            throw new Error('Error: Un archivo no se guardó correctamente en el servidor');
+          }
         }
-        console.log('✅ Archivo físico verificado en:', receiptFilePath);
+        console.log('✅ Archivos físicos verificados:', receiptFilePaths.length);
       }
 
-      // Verificar inmediatamente que el pago se guardó
       const verifyPayment = await prisma.payment.findUnique({
         where: { id: payment.id },
-        select: { id: true, amount: true, debtId: true, receiptFile: true }
+        select: { id: true, amount: true, debtId: true, receiptFiles: true }
       });
 
       if (!verifyPayment) {
         throw new Error('Error: El pago no se guardó correctamente en la base de datos');
       }
 
-      console.log('✅ Pago verificado en BD:', {
-        id: verifyPayment.id,
-        receiptFile: verifyPayment.receiptFile
-      });
-
-      // Confirmar que el nombre del archivo se guardó
-      if (receiptFileName) {
-        if (verifyPayment.receiptFile === receiptFileName) {
-          console.log('✅ Nombre de archivo guardado correctamente en BD:', receiptFileName);
-        } else {
-          console.error('❌ ERROR: El nombre del archivo no coincide');
-          console.error('Esperado:', receiptFileName);
-          console.error('En BD:', verifyPayment.receiptFile);
-        }
-      }
+      console.log('✅ Pago verificado en BD:', { id: verifyPayment.id, receiptFiles: verifyPayment.receiptFiles });
 
       console.log('🔄 Actualizando estado de deuda...');
       // Actualizar estado de la deuda (esto recalcula el remainingAmount basado en todos los pagos)
@@ -284,9 +260,8 @@ export class PaymentService {
       console.log('✅ Última fecha de pago actualizada');
 
       // Construir la URL del comprobante si hay archivo
-      const receiptFileUrl = receiptFileName 
-        ? buildReceiptUrl(payment.id, receiptFileName)
-        : null;
+      const names = getReceiptFileNames(payment);
+      const receiptFilesUrls = buildReceiptUrls(payment.id, names);
 
       const response = {
         id: payment.id,
@@ -299,13 +274,14 @@ export class PaymentService {
         senderEmail: payment.senderEmail,
         confirmationNumber: payment.confirmationNumber,
         paymentDate: payment.paymentDate,
-        receiptFile: receiptFileUrl, // URL completa para el frontend
+        receiptFiles: receiptFilesUrls,
         verified: payment.verified,
         shared: payment.shared || false,
         sharedAt: payment.sharedAt || null,
         exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
         amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
         createdBy: payment.createdBy,
+        createdByUser: payment.createdByUser || null,
         createdAt: payment.createdAt,
         updatedAt: payment.updatedAt
       };
@@ -352,6 +328,13 @@ export class PaymentService {
             updatedAt: true
           }
         },
+        createdByUser: {
+          select: {
+            id: true,
+            nombre: true,
+            email: true
+          }
+        },
         deletedByUser: includeDeleted ? {
           select: {
             id: true,
@@ -371,10 +354,7 @@ export class PaymentService {
       return null;
     }
 
-    // Construir la URL del comprobante si existe
-    const receiptFileUrl = payment.receiptFile 
-      ? buildReceiptUrl(payment.id, payment.receiptFile)
-      : null;
+    const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
 
     return {
       id: payment.id,
@@ -387,13 +367,14 @@ export class PaymentService {
       senderEmail: payment.senderEmail,
       confirmationNumber: payment.confirmationNumber,
       paymentDate: payment.paymentDate,
-      receiptFile: receiptFileUrl, // URL completa para el frontend
+      receiptFiles: receiptFilesUrls,
       verified: payment.verified,
       shared: payment.shared || false,
       sharedAt: payment.sharedAt || null,
       exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
       amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
       createdBy: payment.createdBy,
+      createdByUser: payment.createdByUser || null,
       deletedAt: payment.deletedAt || null,
       deletedBy: payment.deletedBy || null,
       deletedByUser: payment.deletedByUser ? {
@@ -440,12 +421,12 @@ export class PaymentService {
         where.paymentDate = {};
         if (params.startDate) {
           const start = new Date(params.startDate);
-          start.setHours(0, 0, 0, 0);
+          start.setUTCHours(0, 0, 0, 0);
           where.paymentDate.gte = start;
         }
         if (params.endDate) {
           const end = new Date(params.endDate);
-          end.setHours(23, 59, 59, 999);
+          end.setUTCHours(23, 59, 59, 999);
           where.paymentDate.lte = end;
         }
       }
@@ -460,6 +441,13 @@ export class PaymentService {
                 companyName: true,
                 taxId: true,
                 phone: true
+              }
+            },
+            createdByUser: {
+              select: {
+                id: true,
+                nombre: true,
+                email: true
               }
             },
             deletedByUser: includeDeleted ? {
@@ -489,11 +477,7 @@ export class PaymentService {
 
       return {
         data: payments.map((payment: any) => {
-          // Construir la URL del comprobante si existe
-          const receiptFileUrl = payment.receiptFile 
-            ? buildReceiptUrl(payment.id, payment.receiptFile)
-            : null;
-
+          const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
           return {
             id: payment.id,
             debtId: payment.debtId,
@@ -505,13 +489,14 @@ export class PaymentService {
             senderEmail: payment.senderEmail,
             confirmationNumber: payment.confirmationNumber,
             paymentDate: payment.paymentDate,
-            receiptFile: receiptFileUrl,
+            receiptFiles: receiptFilesUrls,
             verified: payment.verified,
             shared: payment.shared || false,
             sharedAt: payment.sharedAt || null,
             exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
             amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
             createdBy: payment.createdBy,
+            createdByUser: payment.createdByUser || null,
             deletedAt: payment.deletedAt || null,
             deletedBy: payment.deletedBy || null,
             deletedByUser: payment.deletedByUser ? {
@@ -535,6 +520,135 @@ export class PaymentService {
       console.error('❌ Error en PaymentService.getPaymentsByDebt:', error);
       throw error;
     }
+  }
+
+  async getPaymentsByCashier(
+    cashierId: number,
+    params?: PaginationParams & { startDate?: Date; endDate?: Date; paymentMethod?: string }
+  ): Promise<PaginatedResponse<PaymentResponse>> {
+    const page = params?.page || 1;
+    const limit = params?.limit || 10;
+    const skip = (page - 1) * limit;
+    const includeDeleted = params?.includeDeleted || false;
+
+    // Filtrar pagos registrados por este cajero (createdBy)
+    const where: any = { createdBy: cashierId };
+
+    // Excluir eliminados por defecto
+    if (!includeDeleted) {
+      where.deletedAt = null;
+    }
+
+    // Filtrar por método de pago si se proporciona
+    if (params?.paymentMethod) {
+      where.paymentMethod = params.paymentMethod;
+    }
+
+    // Filtrar por rango de fechas si se proporciona
+    if (params?.startDate || params?.endDate) {
+      where.paymentDate = {};
+      if (params?.startDate) {
+        const start = new Date(params.startDate);
+        start.setUTCHours(0, 0, 0, 0);
+        where.paymentDate.gte = start;
+      }
+      if (params?.endDate) {
+        const end = new Date(params.endDate);
+        end.setUTCHours(23, 59, 59, 999);
+        where.paymentDate.lte = end;
+      }
+    }
+
+    const [payments, total] = await Promise.all([
+      prisma.payment.findMany({
+        where,
+        include: {
+          supplier: {
+            select: {
+              id: true,
+              companyName: true,
+              taxId: true,
+              phone: true
+            }
+          },
+          debt: {
+            select: {
+              id: true,
+              initialAmount: true,
+              remainingAmount: true,
+              status: true,
+              order: {
+                select: {
+                  id: true,
+                  dispatchDate: true
+                }
+              }
+            }
+          },
+          createdByUser: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
+          },
+          deletedByUser: includeDeleted ? {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
+          } : false
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limit
+      }),
+      prisma.payment.count({ where })
+    ]);
+
+    return {
+      data: payments.map((payment: any) => {
+        const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
+        return {
+          id: payment.id,
+          debtId: payment.debtId,
+          supplierId: payment.supplierId,
+          supplier: payment.supplier,
+          debt: payment.debt,
+          amount: Number(payment.amount),
+          paymentMethod: payment.paymentMethod,
+          senderName: payment.senderName,
+          senderEmail: payment.senderEmail,
+          confirmationNumber: payment.confirmationNumber,
+          paymentDate: payment.paymentDate,
+          receiptFiles: receiptFilesUrls,
+          verified: payment.verified,
+          exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
+          amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+          createdBy: payment.createdBy,
+          createdByUser: payment.createdByUser,
+          deletedAt: payment.deletedAt || null,
+          deletedBy: payment.deletedBy || null,
+          deletedByUser: payment.deletedByUser ? {
+            id: payment.deletedByUser.id,
+            nombre: payment.deletedByUser.nombre,
+            email: payment.deletedByUser.email
+          } : null,
+          deletionReason: payment.deletionReason || null,
+          createdAt: payment.createdAt,
+          updatedAt: payment.updatedAt
+        };
+      }),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
   }
 
   async getPaymentsBySupplier(
@@ -562,12 +676,12 @@ export class PaymentService {
       where.paymentDate = {};
       if (params.startDate) {
         const start = new Date(params.startDate);
-        start.setHours(0, 0, 0, 0);
+        start.setUTCHours(0, 0, 0, 0);
         where.paymentDate.gte = start;
       }
       if (params.endDate) {
         const end = new Date(params.endDate);
-        end.setHours(23, 59, 59, 999);
+        end.setUTCHours(23, 59, 59, 999);
         where.paymentDate.lte = end;
       }
     }
@@ -584,65 +698,69 @@ export class PaymentService {
               phone: true
             }
           },
-          deletedByUser: includeDeleted ? {
-            select: {
-              id: true,
-              nombre: true,
-              email: true
-            }
-          } : false
-        },
-        orderBy: {
-          createdAt: 'desc'
-        },
-        skip,
-        take: limit
-      }),
-      prisma.payment.count({ where })
-    ]);
+          createdByUser: {
+              select: {
+                id: true,
+                nombre: true,
+                email: true
+              }
+            },
+            deletedByUser: includeDeleted ? {
+              select: {
+                id: true,
+                nombre: true,
+                email: true
+              }
+            } : false
+          },
+          orderBy: {
+            createdAt: 'desc'
+          },
+          skip,
+          take: limit
+        }),
+        prisma.payment.count({ where })
+      ]);
 
-    return {
-      data: payments.map((payment: any) => {
-        // Construir la URL del comprobante si existe
-        const receiptFileUrl = payment.receiptFile 
-          ? buildReceiptUrl(payment.id)
-          : null;
-
-        return {
-          id: payment.id,
-          debtId: payment.debtId,
-          supplierId: payment.supplierId,
-          supplier: payment.supplier,
-          amount: Number(payment.amount),
-          paymentMethod: payment.paymentMethod,
-          senderName: payment.senderName,
-          senderEmail: payment.senderEmail,
-          confirmationNumber: payment.confirmationNumber,
-          paymentDate: payment.paymentDate,
-          receiptFile: receiptFileUrl, // URL completa para el frontend
-          verified: payment.verified,
-          exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
-          amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
-          createdBy: payment.createdBy,
-          deletedAt: payment.deletedAt || null,
-          deletedBy: payment.deletedBy || null,
-          deletedByUser: payment.deletedByUser ? {
-            id: payment.deletedByUser.id,
-            nombre: payment.deletedByUser.nombre,
-            email: payment.deletedByUser.email
-          } : null,
-          deletionReason: payment.deletionReason || null,
-          createdAt: payment.createdAt,
-          updatedAt: payment.updatedAt
-        };
-      }),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
-    };
+      return {
+        data: payments.map((payment: any) => {
+          const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
+          return {
+            id: payment.id,
+            debtId: payment.debtId,
+            supplierId: payment.supplierId,
+            supplier: payment.supplier,
+            amount: Number(payment.amount),
+            paymentMethod: payment.paymentMethod,
+            senderName: payment.senderName,
+            senderEmail: payment.senderEmail,
+            confirmationNumber: payment.confirmationNumber,
+            paymentDate: payment.paymentDate,
+            receiptFiles: receiptFilesUrls,
+            verified: payment.verified,
+            exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
+            amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+            createdBy: payment.createdBy,
+            createdByUser: payment.createdByUser || null,
+            deletedAt: payment.deletedAt || null,
+            deletedBy: payment.deletedBy || null,
+            deletedByUser: payment.deletedByUser ? {
+              id: payment.deletedByUser.id,
+              nombre: payment.deletedByUser.nombre,
+              email: payment.deletedByUser.email
+            } : null,
+            deletionReason: payment.deletionReason || null,
+            createdAt: payment.createdAt,
+            updatedAt: payment.updatedAt
+          };
+        }),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      };
   }
 
   async getAllPayments(params?: PaginationParams): Promise<PaginatedResponse<PaymentResponse>> {
@@ -671,6 +789,13 @@ export class PaymentService {
                 phone: true
               }
             },
+            createdByUser: {
+              select: {
+                id: true,
+                nombre: true,
+                email: true
+              }
+            },
             deletedByUser: includeDeleted ? {
               select: {
                 id: true,
@@ -691,10 +816,7 @@ export class PaymentService {
 
       return {
         data: payments.map((payment: any) => {
-          const receiptFileUrl = payment.receiptFile 
-            ? buildReceiptUrl(payment.id, payment.receiptFile)
-            : null;
-
+          const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
           return {
             id: payment.id,
             debtId: payment.debtId,
@@ -706,13 +828,14 @@ export class PaymentService {
             senderEmail: payment.senderEmail,
             confirmationNumber: payment.confirmationNumber,
             paymentDate: payment.paymentDate,
-            receiptFile: receiptFileUrl,
+            receiptFiles: receiptFilesUrls,
             verified: payment.verified,
             shared: payment.shared || false,
             sharedAt: payment.sharedAt || null,
             exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
             amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
             createdBy: payment.createdBy,
+            createdByUser: payment.createdByUser || null,
             deletedAt: payment.deletedAt || null,
             deletedBy: payment.deletedBy || null,
             deletedByUser: payment.deletedByUser ? {
@@ -759,6 +882,13 @@ export class PaymentService {
             taxId: true,
             phone: true
           }
+        },
+        createdByUser: {
+          select: {
+            id: true,
+            nombre: true,
+            email: true
+          }
         }
       },
       orderBy: {
@@ -772,11 +902,7 @@ export class PaymentService {
     }
 
     const payment = payments[0];
-
-    // Construir la URL del comprobante si existe
-    const receiptFileUrl = payment.receiptFile 
-      ? buildReceiptUrl(payment.id, payment.receiptFile)
-      : null;
+    const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
 
     return {
       id: payment.id,
@@ -789,13 +915,14 @@ export class PaymentService {
       senderEmail: payment.senderEmail,
       confirmationNumber: payment.confirmationNumber,
       paymentDate: payment.paymentDate,
-      receiptFile: receiptFileUrl, // URL completa para el frontend
+      receiptFiles: receiptFilesUrls,
       verified: payment.verified,
       shared: payment.shared || false,
       sharedAt: payment.sharedAt || null,
       exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
       amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
       createdBy: payment.createdBy,
+      createdByUser: payment.createdByUser || null,
       deletedAt: payment.deletedAt || null,
       deletedBy: payment.deletedBy || null,
       deletedByUser: null,
@@ -834,6 +961,13 @@ export class PaymentService {
             taxId: true,
             phone: true
           }
+        },
+        createdByUser: {
+          select: {
+            id: true,
+            nombre: true,
+            email: true
+          }
         }
       },
       orderBy: {
@@ -842,12 +976,8 @@ export class PaymentService {
       take: limit
     });
 
-    // Construir la URL del comprobante para cada pago
     return payments.map((payment: any) => {
-      const receiptFileUrl = payment.receiptFile 
-        ? buildReceiptUrl(payment.id)
-        : null;
-
+      const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
       return {
         id: payment.id,
         debtId: payment.debtId,
@@ -859,13 +989,14 @@ export class PaymentService {
         senderEmail: payment.senderEmail,
         confirmationNumber: payment.confirmationNumber,
         paymentDate: payment.paymentDate,
-        receiptFile: receiptFileUrl,
+        receiptFiles: receiptFilesUrls,
         verified: payment.verified,
         shared: payment.shared || false,
         sharedAt: payment.sharedAt || null,
         exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
         amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
         createdBy: payment.createdBy,
+        createdByUser: payment.createdByUser || null,
         deletedAt: payment.deletedAt || null,
         deletedBy: payment.deletedBy || null,
         deletedByUser: null,
@@ -887,8 +1018,9 @@ export class PaymentService {
       senderEmail?: string;
       confirmationNumber?: string;
       paymentDate?: Date;
-      receiptFileName?: string | null;
-      receiptFilePath?: string;
+      receiptFileNames?: string[] | null;
+      receiptFilePaths?: string[];
+      existingReceiptFileNames?: string[]; // URLs convertidas a nombres por el controller (sin subir archivos nuevos)
       removeReceipt?: boolean;
       exchangeRate?: number | null;
       amountInBolivares?: number | null;
@@ -1041,62 +1173,63 @@ export class PaymentService {
       if (data.exchangeRate !== undefined) updateData.exchangeRate = data.exchangeRate || null;
       if (data.amountInBolivares !== undefined) updateData.amountInBolivares = data.amountInBolivares || null;
       
-      // Manejar el comprobante: nuevo archivo, remover existente, o mantener actual
-      if (data.receiptFileName !== undefined) {
-        // Si se quiere remover el comprobante
-        if (data.removeReceipt || data.receiptFileName === null) {
-          console.log('🗑️ Eliminando comprobante del pago...');
-          
-          // Eliminar el archivo físico si existe
-          if (oldPayment.receiptFile) {
+      // Manejar comprobantes: múltiples imágenes nuevas, remover todas, lista existente (URLs) o mantener actual
+      if (data.receiptFileNames !== undefined) {
+        const fs = await import('fs');
+        const path = await import('path');
+        const oldNames = getReceiptFileNames(oldPayment);
+
+        if (data.removeReceipt || data.receiptFileNames === null || (Array.isArray(data.receiptFileNames) && data.receiptFileNames.length === 0)) {
+          console.log('🗑️ Eliminando comprobantes del pago...');
+          for (const name of oldNames) {
             try {
-              const fs = await import('fs');
-              const path = await import('path');
-              const { env } = await import('../config/env');
-              
-              // Construir la ruta completa del archivo
-              const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', oldPayment.receiptFile);
-              
+              const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', name);
               if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
                 console.log('✅ Archivo físico eliminado:', filePath);
-              } else {
-                console.warn('⚠️ Archivo no encontrado en:', filePath);
               }
             } catch (fileError: any) {
               console.error('⚠️ Error al eliminar archivo físico:', fileError.message);
-              // No lanzar error, solo loguear - el campo en BD se actualizará igual
             }
           }
-          
           updateData.receiptFile = null;
-        } else {
-          // Nuevo archivo - eliminar el archivo viejo si existe
-          if (oldPayment.receiptFile && oldPayment.receiptFile !== data.receiptFileName) {
-            console.log('🔄 Reemplazando comprobante viejo con uno nuevo...');
+          updateData.receiptFiles = null;
+        } else if (Array.isArray(data.receiptFileNames) && data.receiptFileNames.length > 0) {
+          for (const name of oldNames) {
             try {
-              const fs = await import('fs');
-              const path = await import('path');
-              const { env } = await import('../config/env');
-              
-              // Construir la ruta completa del archivo viejo
-              const oldFilePath = path.resolve(env.UPLOAD_PATH, 'receipt', oldPayment.receiptFile);
-              
-              if (fs.existsSync(oldFilePath)) {
-                fs.unlinkSync(oldFilePath);
-                console.log('✅ Archivo viejo eliminado:', oldFilePath);
-              } else {
-                console.warn('⚠️ Archivo viejo no encontrado en:', oldFilePath);
+              const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', name);
+              if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log('✅ Archivo viejo eliminado:', filePath);
               }
             } catch (fileError: any) {
               console.error('⚠️ Error al eliminar archivo viejo:', fileError.message);
-              // No lanzar error, continuar con la actualización
             }
           }
-          
-          // Actualizar con el nuevo archivo
-          updateData.receiptFile = data.receiptFileName;
+          updateData.receiptFile = null;
+          updateData.receiptFiles = data.receiptFileNames as unknown as object;
         }
+      } else if (Array.isArray(data.existingReceiptFileNames) && data.existingReceiptFileNames.length > 0) {
+        // Sin archivos nuevos: el frontend envió existingReceiptFiles (URLs). Sincronizar lista (conservar/reordenar/quitar algunas).
+        const fs = await import('fs');
+        const path = await import('path');
+        const oldNames = getReceiptFileNames(oldPayment);
+        const oldSet = new Set(oldNames);
+        const toKeep = data.existingReceiptFileNames.filter((name) => oldSet.has(name));
+        const toRemove = oldNames.filter((name) => !toKeep.includes(name));
+        for (const name of toRemove) {
+          try {
+            const filePath = path.resolve(env.UPLOAD_PATH, 'receipt', name);
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+              console.log('✅ Archivo eliminado (ya no en lista):', name);
+            }
+          } catch (fileError: any) {
+            console.error('⚠️ Error al eliminar archivo:', fileError.message);
+          }
+        }
+        updateData.receiptFile = null;
+        updateData.receiptFiles = toKeep.length > 0 ? (toKeep as unknown as object) : null;
       }
 
       // 6. ACTUALIZAR PROVEEDORES (si cambió)
@@ -1142,6 +1275,13 @@ export class PaymentService {
               taxId: true,
               phone: true
             }
+          },
+          createdByUser: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
           }
         }
       });
@@ -1154,8 +1294,7 @@ export class PaymentService {
         newDebtId: updatedPayment.debtId,
         oldSupplierId,
         newSupplierId: updatedPayment.supplierId,
-        oldReceiptFile: oldPayment.receiptFile,
-        newReceiptFile: updatedPayment.receiptFile
+        newReceiptFiles: updatedPayment.receiptFiles
       });
 
       // 8. RECALCULAR DEUDAS DESPUÉS de actualizar el pago
@@ -1189,10 +1328,7 @@ export class PaymentService {
         status: updatedDebt?.status
       });
 
-      // 10. Construir respuesta
-      const receiptFileUrl = updatedPayment.receiptFile 
-        ? buildReceiptUrl(updatedPayment.id, updatedPayment.receiptFile)
-        : null;
+      const receiptFilesUrls = buildReceiptUrls(updatedPayment.id, getReceiptFileNames(updatedPayment));
 
       return {
         id: updatedPayment.id,
@@ -1205,13 +1341,14 @@ export class PaymentService {
         senderEmail: updatedPayment.senderEmail,
         confirmationNumber: updatedPayment.confirmationNumber,
         paymentDate: updatedPayment.paymentDate,
-        receiptFile: receiptFileUrl,
+        receiptFiles: receiptFilesUrls,
         verified: updatedPayment.verified,
         shared: updatedPayment.shared || false,
         sharedAt: updatedPayment.sharedAt || null,
         exchangeRate: updatedPayment.exchangeRate ? Number(updatedPayment.exchangeRate) : null,
         amountInBolivares: updatedPayment.amountInBolivares ? Number(updatedPayment.amountInBolivares) : null,
         createdBy: updatedPayment.createdBy,
+        createdByUser: updatedPayment.createdByUser || null,
         createdAt: updatedPayment.createdAt,
         updatedAt: updatedPayment.updatedAt
       };
@@ -1294,6 +1431,13 @@ export class PaymentService {
               phone: true
             }
           },
+          createdByUser: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
+          },
           deletedByUser: {
             select: {
               id: true,
@@ -1348,10 +1492,7 @@ export class PaymentService {
         montoAgregado: paymentAmount
       });
 
-      // 6. Construir respuesta
-        const receiptFileUrl = deletedPayment.receiptFile 
-          ? buildReceiptUrl(deletedPayment.id, deletedPayment.receiptFile)
-          : null;
+      const receiptFilesUrls = buildReceiptUrls(deletedPayment.id, getReceiptFileNames(deletedPayment));
 
       const response: PaymentResponse = {
         id: deletedPayment.id,
@@ -1364,13 +1505,14 @@ export class PaymentService {
         senderEmail: deletedPayment.senderEmail,
         confirmationNumber: deletedPayment.confirmationNumber,
         paymentDate: deletedPayment.paymentDate,
-        receiptFile: receiptFileUrl,
+        receiptFiles: receiptFilesUrls,
         verified: deletedPayment.verified,
         shared: deletedPayment.shared || false,
         sharedAt: deletedPayment.sharedAt || null,
         exchangeRate: deletedPayment.exchangeRate ? Number(deletedPayment.exchangeRate) : null,
         amountInBolivares: deletedPayment.amountInBolivares ? Number(deletedPayment.amountInBolivares) : null,
         createdBy: deletedPayment.createdBy,
+        createdByUser: deletedPayment.createdByUser || null,
         deletedAt: deletedPayment.deletedAt || null,
         deletedBy: deletedPayment.deletedBy || null,
         deletedByUser: deletedPayment.deletedByUser ? {
@@ -1458,14 +1600,18 @@ export class PaymentService {
               taxId: true,
               phone: true
             }
+          },
+          createdByUser: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
           }
         }
       });
 
-      // Construir la URL del comprobante si existe
-      const receiptFileUrl = updatedPayment.receiptFile 
-        ? buildReceiptUrl(updatedPayment.id, updatedPayment.receiptFile)
-        : null;
+      const receiptFilesUrls = buildReceiptUrls(updatedPayment.id, getReceiptFileNames(updatedPayment));
 
       // Construir el mensaje de WhatsApp
       const amount = Number(updatedPayment.amount).toFixed(2);
@@ -1475,7 +1621,6 @@ export class PaymentService {
         day: 'numeric'
       });
 
-      // Mapear el método de pago a texto legible
       const paymentMethodMap: { [key: string]: string } = {
         'ZELLE': 'Zelle',
         'TRANSFER': 'Transferencia',
@@ -1483,10 +1628,9 @@ export class PaymentService {
       };
       const paymentMethodText = paymentMethodMap[updatedPayment.paymentMethod] || updatedPayment.paymentMethod;
 
-      // Construir el mensaje siguiendo el formato exacto del ejemplo
       let message = ``;
-      if (receiptFileUrl) {
-        message += `${receiptFileUrl} \n\n`;
+      if (receiptFilesUrls.length > 0) {
+        message += receiptFilesUrls.join('\n') + '\n\n';
       }
 
       message += `📄 *Comprobante de Pago*\n\n`;
@@ -1542,13 +1686,14 @@ export class PaymentService {
         senderEmail: updatedPayment.senderEmail,
         confirmationNumber: updatedPayment.confirmationNumber,
         paymentDate: updatedPayment.paymentDate,
-        receiptFile: receiptFileUrl,
+        receiptFiles: receiptFilesUrls,
         verified: updatedPayment.verified,
         shared: updatedPayment.shared,
         sharedAt: updatedPayment.sharedAt,
         exchangeRate: updatedPayment.exchangeRate ? Number(updatedPayment.exchangeRate) : null,
         amountInBolivares: updatedPayment.amountInBolivares ? Number(updatedPayment.amountInBolivares) : null,
         createdBy: updatedPayment.createdBy,
+        createdByUser: updatedPayment.createdByUser || null,
         deletedAt: updatedPayment.deletedAt || null,
         deletedBy: updatedPayment.deletedBy || null,
         deletedByUser: null,

@@ -123,5 +123,48 @@ export class ReportService {
       throw error;
     }
   }
+
+  /**
+   * Obtiene todos los datos necesarios para generar el PDF de reporte de pagos
+   * por proveedor (incluye pagos individuales, a diferencia de getSupplierDetailedReport).
+   */
+  async getSupplierPaymentReportData(
+    supplierId: number,
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<SupplierDetailedReport> {
+    const supplier = await supplierService.getSupplierById(supplierId);
+    if (!supplier) {
+      throw new Error('Proveedor no encontrado');
+    }
+
+    const debtsResult = await debtService.getDebtsBySupplier(supplierId, {
+      limit: 1000,
+      includeDeletedPayments: true
+    });
+    const debts = debtsResult.data;
+
+    const paymentsResult = await paymentService.getPaymentsBySupplier(supplierId, {
+      limit: 10000,
+      startDate,
+      endDate,
+      includeDeleted: false
+    });
+    const payments = paymentsResult.data;
+
+    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+    const paymentCount = payments.length;
+    const averagePayment = paymentCount > 0 ? totalPaid / paymentCount : 0;
+
+    return {
+      supplier,
+      totalPaid,
+      paymentCount,
+      averagePayment,
+      debts,
+      payments,
+      paymentsPagination: undefined
+    };
+  }
 }
 

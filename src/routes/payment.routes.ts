@@ -3,7 +3,7 @@ import { PaymentController } from '../controllers/payment.controller';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 import { body, param } from 'express-validator';
 import { validate } from '../middleware/validation.middleware';
-import { uploadSingle, handleMulterError } from '../config/multer';
+import { uploadMultiple, handleMulterError } from '../config/multer';
 
 const router = Router();
 const paymentController = new PaymentController();
@@ -19,22 +19,31 @@ router.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Endpoint PÚBLICO del comprobante (sin auth). Debe permanecer público para que
-// el crawler de WhatsApp pueda GET la imagen y mostrar la vista previa (Content-Type: image/jpeg/png).
-// La URL incluye ?v=... como token de versión; no usar auth en esta ruta.
+// Endpoint PÚBLICO de comprobantes (sin auth). Múltiples imágenes por pago.
+// GET /:id/receipt/:filename - devuelve una imagen por su nombre de archivo
+// GET /:id/receipt - devuelve la primera imagen (compatibilidad)
+router.get(
+  '/:id/receipt/:filename',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id) || id <= 0) {
+        return res.status(400).json({ success: false, message: 'ID de pago inválido' });
+      }
+      return paymentController.getReceipt(req, res, next);
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
 router.get(
   '/:id/receipt',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id) || id <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'ID de pago inválido'
-        });
+        return res.status(400).json({ success: false, message: 'ID de pago inválido' });
       }
-      // Llamar al controlador directamente sin validación de express-validator
-      req.params.id = id.toString();
       return paymentController.getReceipt(req, res, next);
     } catch (error: any) {
       next(error);
@@ -52,17 +61,14 @@ router.post(
     console.log('📤 Headers completos:', JSON.stringify(req.headers, null, 2));
     next();
   },
-  uploadSingle('receipt'), // El campo del FormData debe llamarse 'receipt'
+  uploadMultiple('receipt', 10), // Campo FormData 'receipt' - hasta 10 imágenes
   handleMulterError,
   // Middleware después de Multer para ver qué se recibió
   (req: Request, res: Response, next: NextFunction) => {
     console.log('📥 Después de Multer');
     console.log('Body recibido:', req.body);
-    console.log('File recibido:', req.file ? {
-      filename: req.file.filename,
-      originalname: req.file.originalname,
-      size: req.file.size
-    } : 'Ninguno');
+    const files = (req as any).files as Express.Multer.File[] | undefined;
+    console.log('Archivos recibidos:', files?.length ?? 0, files?.map((f: any) => ({ filename: f.filename, originalname: f.originalname, size: f.size })));
     next();
   },
   // Validaciones personalizadas para FormData (los valores vienen como strings)
@@ -140,6 +146,15 @@ router.post(
         }
       }
       return true;
+    }),
+    body('cashierId').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const num = parseInt(value);
+        if (isNaN(num) || num <= 0) {
+          throw new Error('ID de cajero inválido');
+        }
+      }
+      return true;
     })
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR', 'CAJERO'),
@@ -156,6 +171,24 @@ router.get(
   paymentController.searchByConfirmationNumber.bind(paymentController)
 );
 
+// Pagos registrados por un cajero (para cierre de caja)
+router.get(
+  '/cashier/:cashierId',
+  validate([
+    param('cashierId').isInt().withMessage('ID de cajero inválido')
+  ]),
+  paymentController.getByCashier.bind(paymentController)
+);
+
+// Pagos por proveedor (mover antes de /:id para evitar conflicto de rutas)
+router.get(
+  '/supplier/:supplierId',
+  validate([
+    param('supplierId').isInt().withMessage('ID de proveedor inválido')
+  ]),
+  paymentController.getBySupplier.bind(paymentController)
+);
+
 router.get(
   '/:id',
   validate([
@@ -166,7 +199,7 @@ router.get(
 
 router.put(
   '/:id',
-  uploadSingle('receipt'), // Opcional: para actualizar el comprobante
+  uploadMultiple('receipt', 10), // Opcional: hasta 10 imágenes para actualizar comprobantes
   handleMulterError,
   validate([
     param('id').isInt().withMessage('ID inválido'),
@@ -220,7 +253,7 @@ router.put(
     body('paymentDate').optional().notEmpty().withMessage('Fecha de pago requerida'),
     body('confirmationNumber').optional().isString(),
     body('removeReceipt').optional().isBoolean().withMessage('removeReceipt debe ser un booleano'),
-    body('receiptFile').optional().isString().withMessage('receiptFile debe ser un string'),
+    body('receiptFiles').optional().isArray().withMessage('receiptFiles debe ser un array'),
     body('exchangeRate').optional().custom((value) => {
       if (value !== undefined && value !== null && value !== '') {
         const num = parseFloat(value);
@@ -258,14 +291,6 @@ router.delete(
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR'),
   paymentController.delete.bind(paymentController)
-);
-
-router.get(
-  '/supplier/:supplierId',
-  validate([
-    param('supplierId').isInt().withMessage('ID de proveedor inválido')
-  ]),
-  paymentController.getBySupplier.bind(paymentController)
 );
 
 router.post(

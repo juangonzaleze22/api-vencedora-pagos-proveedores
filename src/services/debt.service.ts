@@ -2,6 +2,7 @@ import prisma from '../config/database';
 import { Prisma } from '@prisma/client';
 import { DebtResponse, SearchParams, PaginationParams, PaginatedResponse } from '../types';
 import { AppError } from '../middleware/error.middleware';
+import { getReceiptFileNames, buildReceiptUrls } from '../utils/receiptUrls';
 
 export class DebtService {
   async updateDebtStatus(debtId: number): Promise<void> {
@@ -169,7 +170,7 @@ export class DebtService {
         senderEmail: p.senderEmail,
         confirmationNumber: p.confirmationNumber,
         paymentDate: p.paymentDate,
-        receiptFile: p.receiptFile,
+        receiptFiles: buildReceiptUrls(p.id, getReceiptFileNames(p)),
         verified: p.verified,
         createdBy: p.createdBy,
         deletedAt: p.deletedAt || null,
@@ -313,7 +314,7 @@ export class DebtService {
             senderEmail: p.senderEmail,
             confirmationNumber: p.confirmationNumber,
             paymentDate: p.paymentDate,
-            receiptFile: p.receiptFile,
+            receiptFiles: buildReceiptUrls(p.id, getReceiptFileNames(p)),
             verified: p.verified,
             createdBy: p.createdBy,
             deletedAt: p.deletedAt || null,
@@ -441,7 +442,7 @@ export class DebtService {
           senderName: p.senderName,
           confirmationNumber: p.confirmationNumber,
           paymentDate: p.paymentDate,
-          receiptFile: p.receiptFile,
+          receiptFiles: buildReceiptUrls(p.id, getReceiptFileNames(p)),
           verified: p.verified,
           createdBy: p.createdBy,
           createdAt: p.createdAt,
@@ -682,7 +683,7 @@ export class DebtService {
           senderEmail: p.senderEmail,
           confirmationNumber: p.confirmationNumber,
           paymentDate: p.paymentDate,
-          receiptFile: p.receiptFile,
+          receiptFiles: buildReceiptUrls(p.id, getReceiptFileNames(p)),
           verified: p.verified,
           createdBy: p.createdBy,
           deletedAt: p.deletedAt || null,
