@@ -16,7 +16,8 @@ router.post(
     body('companyName').trim().isLength({ min: 3 }).withMessage('El nombre de la empresa debe tener al menos 3 caracteres'),
     body('taxId').optional().trim().notEmpty().withMessage('El RIF/Identificación Fiscal no puede estar vacío'),
     body('email').optional().trim().isEmail().withMessage('El email debe ser válido'),
-    body('phone').optional().trim().isString().withMessage('El teléfono debe ser una cadena de texto')
+    body('phone').optional().trim().isString().withMessage('El teléfono debe ser una cadena de texto'),
+    body('title').optional().trim().isString().withMessage('El título de la deuda debe ser un texto')
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR'),
   supplierController.create.bind(supplierController)

@@ -51,6 +51,22 @@ router.get(
   }
 );
 
+// Preview para WhatsApp: HTML con Open Graph para que el link muestre imagen y texto
+router.get(
+  '/:id/preview',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id) || id <= 0) {
+        return res.status(400).send('ID de pago inválido');
+      }
+      return paymentController.getPreview(req, res, next);
+    } catch (error: any) {
+      next(error);
+    }
+  }
+);
+
 router.use(authenticate);
 
 router.post(

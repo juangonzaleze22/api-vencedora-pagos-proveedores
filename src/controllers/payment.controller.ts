@@ -4,7 +4,8 @@ import { AppError } from '../middleware/error.middleware';
 import path from 'path';
 import fs from 'fs';
 import prisma from '../config/database';
-import { getReceiptFileNames, parseReceiptFilenameFromUrl } from '../utils/receiptUrls';
+import { getReceiptFileNames, parseReceiptFilenameFromUrl, buildReceiptUrl } from '../utils/receiptUrls';
+import { env } from '../config/env';
 
 const paymentService = new PaymentService();
 
@@ -426,6 +427,98 @@ export class PaymentController {
       res.sendFile(path.resolve(filePath), {
         headers: { 'Content-Type': contentType }
       });
+    } catch (error: any) {
+      next(error);
+    }
+  }
+
+  /**
+   * Página de preview para compartir en WhatsApp. Devuelve HTML con meta tags
+   * Open Graph y Twitter Card para que el link muestre imagen, título y descripción.
+   * Ruta PÚBLICA (sin auth).
+   */
+  async getPreview(req: Request, res: Response, next: NextFunction) {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id) || id <= 0) {
+        return res.status(400).send('ID de pago inválido');
+      }
+
+      const payment = await prisma.payment.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          amount: true,
+          paymentDate: true,
+          paymentMethod: true,
+          receiptFile: true,
+          receiptFiles: true,
+          supplier: { select: { companyName: true } }
+        }
+      });
+
+      if (!payment) {
+        return res.status(404).send('Pago no encontrado');
+      }
+
+      const fileNames = getReceiptFileNames(payment);
+      if (fileNames.length === 0) {
+        return res.status(404).send('No hay comprobante para este pago');
+      }
+
+      const baseUrl = (env.API_BASE_URL || '').replace(/\/$/, '') || `${req.protocol}://${req.get('host')}`;
+      const previewUrl = `${baseUrl}/api/payments/${payment.id}/preview`;
+      let firstImageUrl = buildReceiptUrl(payment.id, fileNames[0]);
+      if (!firstImageUrl.startsWith('http')) {
+        firstImageUrl = `${baseUrl}${firstImageUrl.startsWith('/') ? '' : '/'}${firstImageUrl}`;
+      }
+
+      const amount = Number(payment.amount).toFixed(2);
+      const date = new Date(payment.paymentDate).toLocaleDateString('es-VE', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+      const title = `Comprobante de pago - ${payment.supplier.companyName}`;
+      const description = `Pago de $${amount} • ${date} • ${payment.supplier.companyName}`;
+
+      const escapeHtml = (s: string) =>
+        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const safeTitle = escapeHtml(title);
+      const safeDescription = escapeHtml(description);
+      const safeImageUrl = escapeHtml(firstImageUrl);
+      const safePreviewUrl = escapeHtml(previewUrl);
+
+      const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${safeTitle}</title>
+  <!-- Open Graph (Facebook / WhatsApp) -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="${safePreviewUrl}">
+  <meta property="og:title" content="${safeTitle}">
+  <meta property="og:description" content="${safeDescription}">
+  <meta property="og:image" content="${safeImageUrl}">
+  <meta property="og:image:secure_url" content="${safeImageUrl}">
+  <meta property="og:locale" content="es_VE">
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${safeTitle}">
+  <meta name="twitter:description" content="${safeDescription}">
+  <meta name="twitter:image" content="${safeImageUrl}">
+</head>
+<body>
+  <p>Comprobante de pago</p>
+  <p>${safeDescription}</p>
+  <p><a href="${safeImageUrl}">Ver imagen del comprobante</a></p>
+</body>
+</html>`;
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
+      res.send(html);
     } catch (error: any) {
       next(error);
     }

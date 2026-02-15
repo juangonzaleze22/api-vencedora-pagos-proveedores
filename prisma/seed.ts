@@ -33,7 +33,7 @@ async function main() {
   }
 
   // Hash de password por defecto
-  const defaultPassword = 'password123';
+  const defaultPassword = 'vencedora123';
   const hashedPassword = await bcrypt.hash(defaultPassword, 10);
 
   // Crear usuarios

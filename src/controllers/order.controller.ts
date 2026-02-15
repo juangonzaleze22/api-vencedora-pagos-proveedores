@@ -99,6 +99,10 @@ export class OrderController {
         updateData.amount = parseFloat(req.body.amount);
       }
 
+      if (req.body.title !== undefined) {
+        updateData.title = req.body.title;
+      }
+
       console.log(`Actualizando orden ${id} con datos:`, updateData);
       const updatedOrder = await orderService.updateOrder(id, updateData);
       console.log(`Orden ${id} actualizada exitosamente`);

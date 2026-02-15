@@ -10,7 +10,7 @@ import { AppError } from '../middleware/error.middleware';
 import { DebtService } from './debt.service';
 import { SupplierService } from './supplier.service';
 import { env } from '../config/env';
-import { getReceiptFileNames, buildReceiptUrl, buildReceiptUrls } from '../utils/receiptUrls';
+import { getReceiptFileNames, buildReceiptUrl, buildReceiptUrls, buildPreviewUrl } from '../utils/receiptUrls';
 
 // PaymentMethod type
 type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
@@ -324,6 +324,7 @@ export class PaymentService {
             initialAmount: true,
             remainingAmount: true,
             dueDate: true,
+            title: true,
             createdAt: true,
             updatedAt: true
           }
@@ -392,6 +393,7 @@ export class PaymentService {
         initialAmount: Number(payment.debt.initialAmount),
         remainingAmount: Number(payment.debt.remainingAmount),
         dueDate: payment.debt.dueDate,
+        title: payment.debt.title ?? undefined,
         createdAt: payment.debt.createdAt,
         updatedAt: payment.debt.updatedAt
       } : undefined
@@ -1628,8 +1630,11 @@ export class PaymentService {
       };
       const paymentMethodText = paymentMethodMap[updatedPayment.paymentMethod] || updatedPayment.paymentMethod;
 
-      let message = ``;
+      let message = '';
+      // Incluir primero la URL de preview para que WhatsApp muestre imagen, título y descripción en el preview del chat
       if (receiptFilesUrls.length > 0) {
+        const previewUrl = buildPreviewUrl(updatedPayment.id);
+        message += previewUrl + '\n\n';
         message += receiptFilesUrls.join('\n') + '\n\n';
       }
 

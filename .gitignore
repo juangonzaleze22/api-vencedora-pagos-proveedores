@@ -103,7 +103,6 @@ pids/
 # dotenv environment variable files
 .env.backup
 .env.save
-.env
 
 # TypeScript
 *.tsbuildinfo

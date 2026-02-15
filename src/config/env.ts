@@ -48,15 +48,28 @@ function validateEnv(): EnvConfig {
     API_BASE_URL: process.env.API_BASE_URL,
   };
 
-  if (!config.DATABASE_URL || config.DATABASE_URL.trim() === '') {
+  let dbUrl = (config.DATABASE_URL || '').trim();
+  if ((dbUrl.startsWith('"') && dbUrl.endsWith('"')) || (dbUrl.startsWith("'") && dbUrl.endsWith("'"))) {
+    dbUrl = dbUrl.slice(1, -1).trim();
+  }
+
+  if (!dbUrl) {
     const msg =
-      'DATABASE_URL no está definida. En el servidor, crea un archivo .env en la carpeta desde donde ejecutas la app (ej. public_html) con DATABASE_URL="mysql://usuario:contraseña@host:3306/nombre_bd", o configura la variable en el panel del hosting.';
+      'DATABASE_URL no está definida. Usa postgresql://... en local o mysql://... en producción.';
     console.error('❌ ' + msg);
     throw new Error(msg);
   }
 
-  // Asegurar que Prisma y el resto del código vean las variables en process.env
-  if (!process.env.DATABASE_URL) process.env.DATABASE_URL = config.DATABASE_URL;
+  const validProtocol = /^(postgresql|postgres|mysql):\/\//i.test(dbUrl);
+  if (!validProtocol) {
+    const msg =
+      'DATABASE_URL debe empezar por postgresql:// (local) o mysql:// (ej. producción).';
+    console.error('❌ ' + msg);
+    throw new Error(msg);
+  }
+
+  config.DATABASE_URL = dbUrl;
+  process.env.DATABASE_URL = config.DATABASE_URL;
   if (!process.env.JWT_SECRET) process.env.JWT_SECRET = config.JWT_SECRET;
 
   return config;

@@ -43,6 +43,7 @@ export interface CreateSupplierDTO {
   initialDebtAmount?: number;
   debtDate?: Date;
   creditDays?: number;
+  title?: string; // Título de la deuda inicial (opcional)
 }
 
 export interface UpdateSupplierDTO {
@@ -72,12 +73,14 @@ export interface CreateOrderDTO {
   amount: number;
   dispatchDate: Date;
   creditDays: number;
+  title?: string; // Título de la deuda asociada (opcional)
 }
 
 export interface UpdateOrderDTO {
   dispatchDate?: Date | string;
   creditDays?: number;
   amount?: number;
+  title?: string | null;
 }
 
 export interface OrderResponse {
@@ -96,12 +99,14 @@ export interface OrderResponse {
   createdBy: number;
   createdAt: Date;
   updatedAt: Date;
+  title?: string | null;
   debt?: {
     id: number;
     status: DebtStatus;
     remainingAmount: number;
     initialAmount: number;
     dueDate: Date;
+    title?: string | null;
     createdAt: Date;
     updatedAt: Date;
     payments?: PaymentResponse[];
@@ -112,6 +117,7 @@ export interface OrderResponse {
 export interface UpdateDebtDTO {
   initialAmount?: number;
   dueDate?: Date | string;
+  title?: string | null;
 }
 
 export interface DebtResponse {
@@ -124,6 +130,7 @@ export interface DebtResponse {
     taxId: string | null;
     phone: string | null;
   };
+  title?: string | null;
   initialAmount: number;
   remainingAmount: number;
   status: DebtStatus;
@@ -195,6 +202,7 @@ export interface PaymentResponse {
     initialAmount: number;
     remainingAmount: number;
     dueDate: Date;
+    title?: string | null;
     createdAt: Date;
     updatedAt: Date;
   };

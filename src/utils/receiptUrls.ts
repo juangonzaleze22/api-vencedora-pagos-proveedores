@@ -27,6 +27,16 @@ export function buildReceiptUrls(paymentId: number, fileNames: string[]): string
   return fileNames.map((name) => buildReceiptUrl(paymentId, name));
 }
 
+/** URL de la página de preview (HTML con Open Graph) para compartir en WhatsApp */
+export function buildPreviewUrl(paymentId: number): string {
+  const path = `/api/payments/${paymentId}/preview`;
+  if (env.API_BASE_URL) {
+    const baseUrl = env.API_BASE_URL.replace(/\/$/, '');
+    return `${baseUrl}${path}`;
+  }
+  return path;
+}
+
 /**
  * Extrae el nombre del archivo de una URL de comprobante.
  * Ej: "http://localhost:3000/api/payments/20/receipt/receipt-1770860298749-548140308.JPG?v=1770860298749"

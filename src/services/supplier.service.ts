@@ -12,7 +12,7 @@ import { AppError } from '../middleware/error.middleware';
 
 export class SupplierService {
   async createSupplier(data: CreateSupplierDTO, userId: number): Promise<SupplierResponse> {
-    const { companyName, taxId, email, phone, status, initialDebtAmount, debtDate, creditDays } = data;
+    const { companyName, taxId, email, phone, status, initialDebtAmount, debtDate, creditDays, title } = data;
 
     // Validar que el taxId sea único solo si se proporciona
     if (taxId != null && taxId !== '') {
@@ -67,6 +67,7 @@ export class SupplierService {
         data: {
           orderId: order.id,
           supplierId: supplier.id,
+          title: title ?? null,
           initialAmount: debtAmount,
           remainingAmount: debtAmount,
           dueDate,

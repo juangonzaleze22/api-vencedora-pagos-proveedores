@@ -152,6 +152,7 @@ export class DebtService {
       orderId: debt.orderId,
       supplierId: debt.supplierId,
       supplier: debt.supplier,
+      title: debt.title ?? undefined,
       initialAmount: Number(debt.initialAmount),
       remainingAmount: Number(debt.remainingAmount),
       status: debt.status,
@@ -296,6 +297,7 @@ export class DebtService {
           orderId: debt.orderId,
           supplierId: debt.supplierId,
           supplier: debt.supplier,
+          title: debt.title ?? undefined,
           initialAmount: Number(debt.initialAmount),
           remainingAmount: Number(debt.remainingAmount),
           status: debt.status,
@@ -425,6 +427,7 @@ export class DebtService {
         orderId: debt.orderId,
         supplierId: debt.supplierId,
         supplier: debt.supplier,
+        title: debt.title ?? undefined,
         initialAmount: Number(debt.initialAmount),
         remainingAmount: Number(debt.remainingAmount),
         status: debt.status,
@@ -468,6 +471,7 @@ export class DebtService {
     data: {
       initialAmount?: number;
       dueDate?: Date;
+      title?: string | null;
     }
   ): Promise<DebtResponse> {
     try {
@@ -500,9 +504,11 @@ export class DebtService {
       }
 
       // 2. Validar que al menos un campo se esté actualizando
+      const titleChanged = data.title !== undefined && data.title !== (currentDebt.title ?? null);
       const hasChanges =
         (data.initialAmount !== undefined && data.initialAmount !== Number(currentDebt.initialAmount)) ||
-        (data.dueDate !== undefined && new Date(data.dueDate).getTime() !== new Date(currentDebt.dueDate).getTime());
+        (data.dueDate !== undefined && new Date(data.dueDate).getTime() !== new Date(currentDebt.dueDate).getTime()) ||
+        titleChanged;
 
       if (!hasChanges) {
         throw new AppError('No se han realizado cambios en la deuda', 400);
@@ -561,6 +567,11 @@ export class DebtService {
           oldDueDate: currentDebt.dueDate,
           newDueDate: updateData.dueDate
         });
+      }
+
+      if (data.title !== undefined) {
+        updateData.title = data.title;
+        console.log(`📝 Actualizando título:`, { title: data.title });
       }
 
       // 6. Recalcular el status de la deuda basado en el nuevo remainingAmount
@@ -665,6 +676,7 @@ export class DebtService {
         orderId: updatedDebt.orderId,
         supplierId: updatedDebt.supplierId,
         supplier: updatedDebt.supplier,
+        title: updatedDebt.title ?? undefined,
         initialAmount: Number(updatedDebt.initialAmount),
         remainingAmount: Number(updatedDebt.remainingAmount),
         status: updatedDebt.status,
@@ -698,6 +710,54 @@ export class DebtService {
       console.error(`❌ Error al actualizar deuda ${debtId}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Elimina una deuda y todos sus pagos asociados.
+   * Recalcula el totalDebt del proveedor después de eliminar.
+   * Todo se ejecuta en una transacción para evitar estados inconsistentes.
+   */
+  async deleteDebt(debtId: number): Promise<void> {
+    await prisma.$transaction(async (tx: any) => {
+      const debt = await tx.debt.findUnique({
+        where: { id: debtId },
+        select: { id: true, supplierId: true }
+      });
+
+      if (!debt) {
+        throw new AppError('Deuda no encontrada', 404);
+      }
+
+      // 1. Eliminar todos los pagos asociados a la deuda (evitar pagos huérfanos)
+      const deletedPayments = await tx.payment.deleteMany({
+        where: { debtId }
+      });
+      console.log(`🗑️ Eliminados ${deletedPayments.count} pago(s) de la deuda ${debtId}`);
+
+      // 2. Eliminar la deuda
+      await tx.debt.delete({
+        where: { id: debtId }
+      });
+      console.log(`✅ Deuda ${debtId} eliminada`);
+
+      // 3. Recalcular totalDebt del proveedor (suma de remainingAmount de sus deudas restantes)
+      const remainingDebts = await tx.debt.findMany({
+        where: { supplierId: debt.supplierId },
+        select: { remainingAmount: true }
+      });
+
+      const newTotalDebt = remainingDebts.reduce((sum: number, d: any) => sum + Math.max(0, Number(d.remainingAmount)), 0);
+      const supplierStatus: 'PENDING' | 'COMPLETED' = newTotalDebt > 0 ? 'PENDING' : 'COMPLETED';
+
+      await tx.supplier.update({
+        where: { id: debt.supplierId },
+        data: {
+          totalDebt: newTotalDebt,
+          status: supplierStatus
+        }
+      });
+      console.log(`💰 Proveedor ${debt.supplierId} actualizado: totalDebt=${newTotalDebt}, status=${supplierStatus}`);
+    });
   }
 }
 

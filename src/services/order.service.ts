@@ -59,6 +59,7 @@ export class OrderService {
       data: {
         orderId: order.id,
         supplierId,
+        title: data.title ?? null,
         initialAmount: amount,
         remainingAmount: amount,
         dueDate,
@@ -80,12 +81,14 @@ export class OrderService {
       createdBy: order.createdBy,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
+      title: debt.title ?? null,
       debt: {
         id: debt.id,
         status: debt.status,
         remainingAmount: Number(debt.remainingAmount),
         initialAmount: Number(debt.initialAmount),
         dueDate: debt.dueDate,
+        title: debt.title ?? undefined,
         createdAt: debt.createdAt,
         updatedAt: debt.updatedAt,
         payments: [] // Al crear la orden, aún no hay pagos
@@ -151,12 +154,14 @@ export class OrderService {
       createdBy: order.createdBy,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
+      title: order.debt?.title ?? null,
       debt: order.debt ? {
         id: order.debt.id,
         status: order.debt.status,
         remainingAmount: Number(order.debt.remainingAmount),
         initialAmount: Number(order.debt.initialAmount),
         dueDate: order.debt.dueDate,
+        title: order.debt.title ?? undefined,
         createdAt: order.debt.createdAt,
         updatedAt: order.debt.updatedAt,
         payments: order.debt.payments.map((p: any) => ({
@@ -215,6 +220,7 @@ export class OrderService {
               remainingAmount: true,
               initialAmount: true,
               dueDate: true,
+              title: true,
               createdAt: true,
               updatedAt: true
             }
@@ -241,12 +247,14 @@ export class OrderService {
         createdBy: order.createdBy,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
+        title: order.debt?.title ?? null,
         debt: order.debt ? {
           id: order.debt.id,
           status: order.debt.status,
           remainingAmount: Number(order.debt.remainingAmount),
           initialAmount: Number(order.debt.initialAmount),
           dueDate: order.debt.dueDate,
+          title: order.debt.title ?? undefined,
           createdAt: order.debt.createdAt,
           updatedAt: order.debt.updatedAt
         } : undefined
@@ -283,6 +291,7 @@ export class OrderService {
               remainingAmount: true,
               initialAmount: true,
               dueDate: true,
+              title: true,
               createdAt: true,
               updatedAt: true
             }
@@ -309,12 +318,14 @@ export class OrderService {
         createdBy: order.createdBy,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
+        title: order.debt?.title ?? null,
         debt: order.debt ? {
           id: order.debt.id,
           status: order.debt.status,
           remainingAmount: Number(order.debt.remainingAmount),
           initialAmount: Number(order.debt.initialAmount),
           dueDate: order.debt.dueDate,
+          title: order.debt.title ?? undefined,
           createdAt: order.debt.createdAt,
           updatedAt: order.debt.updatedAt
         } : undefined
@@ -373,11 +384,14 @@ export class OrderService {
 
       // 2. Validar que al menos un campo se esté actualizando
       const oldAmount = Number(currentOrder.amount);
+      const currentTitle = currentOrder.debt?.title ?? null;
+      const newTitle = data.title !== undefined ? data.title : null;
       const hasChanges =
         (data.dispatchDate !== undefined && 
          new Date(data.dispatchDate).getTime() !== new Date(currentOrder.dispatchDate).getTime()) ||
         (data.creditDays !== undefined && data.creditDays !== currentOrder.creditDays) ||
-        (data.amount !== undefined && data.amount !== oldAmount);
+        (data.amount !== undefined && data.amount !== oldAmount) ||
+        (data.title !== undefined && newTitle !== currentTitle);
 
       if (!hasChanges) {
         throw new AppError('No se han realizado cambios en la orden', 400);
@@ -414,9 +428,12 @@ export class OrderService {
         newDueDate: newDueDate
       });
 
-      // 6. Calcular cambios en deuda si amount cambió
+      // 6. Calcular cambios en deuda si amount cambió o si title se actualiza
       const amountChanged = data.amount !== undefined && data.amount !== oldAmount;
       let debtUpdateData: any = { dueDate: newDueDate };
+      if (data.title !== undefined) {
+        debtUpdateData.title = data.title;
+      }
       let supplierUpdateData: any = {};
 
       if (amountChanged && currentOrder.debt) {
@@ -589,12 +606,14 @@ export class OrderService {
         createdBy: orderWithDebt.createdBy,
         createdAt: orderWithDebt.createdAt,
         updatedAt: orderWithDebt.updatedAt,
+        title: orderWithDebt.debt?.title ?? null,
         debt: orderWithDebt.debt ? {
           id: orderWithDebt.debt.id,
           status: orderWithDebt.debt.status,
           remainingAmount: Number(orderWithDebt.debt.remainingAmount),
           initialAmount: Number(orderWithDebt.debt.initialAmount),
           dueDate: orderWithDebt.debt.dueDate,
+          title: orderWithDebt.debt.title ?? undefined,
           createdAt: orderWithDebt.debt.createdAt,
           updatedAt: orderWithDebt.debt.updatedAt,
           payments: orderWithDebt.debt.payments.map((p: any) => ({

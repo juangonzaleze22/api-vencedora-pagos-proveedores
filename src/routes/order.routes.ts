@@ -15,7 +15,8 @@ router.post(
     body('supplierId').isInt().withMessage('ID de proveedor inválido'),
     body('amount').isFloat({ min: 0.01 }).withMessage('El monto debe ser mayor a 0'),
     body('dispatchDate').isISO8601().withMessage('Fecha de despacho inválida'),
-    body('creditDays').isInt({ min: 1 }).withMessage('Los días de crédito deben ser mayor a 0')
+    body('creditDays').isInt({ min: 1 }).withMessage('Los días de crédito deben ser mayor a 0'),
+    body('title').optional().isString().withMessage('El título debe ser un texto')
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR', 'CAJERO'),
   orderController.create.bind(orderController)
@@ -73,10 +74,12 @@ router.put(
       }
       return true;
     }),
+    body('title').optional().custom((value) => value === null || value === undefined || typeof value === 'string').withMessage('El título debe ser un texto o null'),
     body().custom((value) => {
       // Validar que al menos uno de los campos esté presente
-      if (!value.dispatchDate && !value.creditDays && !value.amount) {
-        throw new Error('Debe proporcionar al menos dispatchDate, creditDays o amount para actualizar');
+      const hasField = value.dispatchDate !== undefined || value.creditDays !== undefined || value.amount !== undefined || value.title !== undefined;
+      if (!hasField) {
+        throw new Error('Debe proporcionar al menos dispatchDate, creditDays, amount o title para actualizar');
       }
       return true;
     })

@@ -44,10 +44,7 @@ router.get(
 
 router.get(
   '/supplier/:supplierId',
-  [
-    param('supplierId').isInt().withMessage('ID de proveedor inválido'),
-    validate
-  ],
+  validate([param('supplierId').isInt().withMessage('ID de proveedor inválido')]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const supplierId = parseInt(req.params.supplierId);
@@ -174,10 +171,7 @@ router.get(
 
 router.get(
   '/:id',
-  [
-    param('id').isInt().withMessage('ID inválido'),
-    validate
-  ],
+  validate([param('id').isInt().withMessage('ID inválido')]),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const id = parseInt(req.params.id);
@@ -202,7 +196,7 @@ router.get(
 
 router.put(
   '/:id',
-  [
+  validate([
     param('id').isInt().withMessage('ID inválido'),
     body('initialAmount').optional().custom((value) => {
       if (value !== undefined && value !== null && value !== '') {
@@ -228,8 +222,13 @@ router.put(
       }
       return true;
     }),
-    validate
-  ],
+    body('title').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '' && typeof value !== 'string') {
+        throw new Error('El título debe ser un texto');
+      }
+      return true;
+    })
+  ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -250,6 +249,10 @@ router.put(
         updateData.dueDate = new Date(req.body.dueDate);
       }
 
+      if (req.body.title !== undefined) {
+        updateData.title = req.body.title === '' || req.body.title === null ? null : req.body.title;
+      }
+
       console.log(`Actualizando deuda ${id} con datos:`, updateData);
       const updatedDebt = await debtService.updateDebt(id, updateData);
       console.log(`Deuda ${id} actualizada exitosamente`);
@@ -261,6 +264,30 @@ router.put(
       });
     } catch (error: any) {
       console.error('Error al actualizar deuda:', error);
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/:id',
+  validate([param('id').isInt().withMessage('ID inválido')]),
+  authorize('ADMINISTRADOR', 'SUPERVISOR'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseInt(req.params.id);
+      console.log(`🗑️ [DELETE] Eliminando deuda ${id}...`);
+      if (isNaN(id)) {
+        throw new AppError('ID de deuda inválido', 400);
+      }
+      await debtService.deleteDebt(id);
+      console.log(`✅ [DELETE] Deuda ${id} eliminada, enviando respuesta`);
+      res.json({
+        success: true,
+        message: 'Deuda y pagos asociados eliminados correctamente'
+      });
+    } catch (error: any) {
+      console.error('❌ [DELETE] Error al eliminar deuda:', error);
       next(error);
     }
   }

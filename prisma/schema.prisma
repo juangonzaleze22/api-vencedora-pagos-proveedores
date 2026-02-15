@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -84,6 +84,7 @@ model Debt {
   order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   supplierId     Int
   supplier       Supplier     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  title          String?      // Título o descripción de la deuda
   initialAmount  Decimal      @db.Decimal(10, 2)
   remainingAmount Decimal     @db.Decimal(10, 2)
   status         DebtStatus   @default(PENDING)
