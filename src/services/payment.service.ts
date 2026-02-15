@@ -10,7 +10,7 @@ import { AppError } from '../middleware/error.middleware';
 import { DebtService } from './debt.service';
 import { SupplierService } from './supplier.service';
 import { env } from '../config/env';
-import { getReceiptFileNames, buildReceiptUrl, buildReceiptUrls, buildPreviewUrl } from '../utils/receiptUrls';
+import { getReceiptFileNames, buildReceiptUrl, buildReceiptUrls } from '../utils/receiptUrls';
 
 // PaymentMethod type
 type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
@@ -1631,10 +1631,8 @@ export class PaymentService {
       const paymentMethodText = paymentMethodMap[updatedPayment.paymentMethod] || updatedPayment.paymentMethod;
 
       let message = '';
-      // Incluir primero la URL de preview para que WhatsApp muestre imagen, título y descripción en el preview del chat
+      // Incluir primero las URLs directas de las imágenes del recibo para que WhatsApp las muestre como preview/foto en el chat (no como link de página)
       if (receiptFilesUrls.length > 0) {
-        const previewUrl = buildPreviewUrl(updatedPayment.id);
-        message += previewUrl + '\n\n';
         message += receiptFilesUrls.join('\n') + '\n\n';
       }
 
