@@ -33,15 +33,17 @@ function runDbPushIfEnabled() {
   const projectRoot = path.resolve(__dirname, '..');
   console.log('🔄 Sincronizando schema con la BD (prisma db push)...');
   try {
-    execSync('npx prisma db push --skip-generate', {
+    const out = execSync('npx prisma db push --skip-generate', {
       cwd: projectRoot,
-      stdio: 'inherit',
+      encoding: 'utf8',
       env: process.env,
     });
+    if (out) console.log(out);
     console.log('✅ Schema sincronizado.');
-  } catch (e) {
-    console.error('❌ Error al sincronizar schema:', e);
-    throw e;
+  } catch (e: any) {
+    const msg = e?.stderr || e?.stdout || e?.message || String(e);
+    console.error('❌ Error al sincronizar schema (la app seguirá; revisa que prisma/ esté en el servidor y DATABASE_URL sea correcta):', msg);
+    // No lanzar: permitir que la app arranque por si la BD ya está bien
   }
 }
 
