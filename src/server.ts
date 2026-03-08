@@ -15,6 +15,8 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // Importar después de los handlers de errores
 // Cargar env PRIMERO para que dotenv y DATABASE_URL estén en process.env antes de Prisma
+import { execSync } from 'child_process';
+import path from 'path';
 import { env } from './config/env';
 import app from './app';
 import { logger } from './utils/logger';
@@ -24,11 +26,31 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 console.log('PORT ==>>', PORT);
 
+// Sincronizar schema con la BD al arrancar (útil en Hostinger sin consola).
+// Actívalo en el panel: RUN_DB_PUSH_ON_START = true
+function runDbPushIfEnabled() {
+  if (process.env.RUN_DB_PUSH_ON_START !== 'true') return;
+  const projectRoot = path.resolve(__dirname, '..');
+  console.log('🔄 Sincronizando schema con la BD (prisma db push)...');
+  try {
+    execSync('npx prisma db push --skip-generate', {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    console.log('✅ Schema sincronizado.');
+  } catch (e) {
+    console.error('❌ Error al sincronizar schema:', e);
+    throw e;
+  }
+}
+
 // Función para iniciar el servidor
 async function startServer() {
   try {
     console.log('🔄 Iniciando servidor...');
-    
+    runDbPushIfEnabled();
+
     // Verificar conexión a la base de datos
     console.log('🔄 Conectando a la base de datos...');
     await prisma.$connect();

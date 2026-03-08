@@ -8,6 +8,7 @@
     "build": "npx rimraf dist && npx prisma generate && npx prisma db push && tsc",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
+    "prisma:dbpush": "prisma db push",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:studio": "prisma studio",

@@ -2,6 +2,11 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 
+// Dos orígenes posibles de variables:
+// 1) Archivo .env en disco → dotenv lo carga en process.env.
+// 2) Panel del hosting (Hostinger, etc.) → el proceso ya recibe process.env al iniciar.
+// Si no hay archivo .env pero el panel tiene las variables, la app las usa igual ("variables del sistema").
+
 // Cargar .env: primero desde la raíz del proyecto (carpeta que contiene /dist), luego desde process.cwd()
 const projectRoot = path.resolve(__dirname, '..', '..');
 const envPaths = [
@@ -22,12 +27,15 @@ for (const envPath of envPaths) {
   }
 }
 if (!loaded && process.env.NODE_ENV !== 'test') {
-  // En hosting (ej. Hostinger) las variables suelen venir del panel, no de un archivo .env
-  const hasEnvVars = !!(process.env.DATABASE_URL || process.env.JWT_SECRET);
-  if (hasEnvVars) {
-    console.log('ℹ️ No hay archivo .env; usando variables del panel/sistema (correcto en hosting).');
+  const hasDb = !!process.env.DATABASE_URL;
+  const hasJwt = !!process.env.JWT_SECRET;
+  if (hasDb && hasJwt) {
+    console.log('ℹ️ Sin archivo .env; usando variables del panel/sistema (correcto en Hostinger).');
   } else {
-    console.warn(`⚠️ No se encontró .env en: ${envPaths.join(' ni en ')}. Define DATABASE_URL y JWT_SECRET en el panel o en .env.`);
+    console.warn(
+      `⚠️ No hay archivo .env y el proceso no recibe todas las variables: DATABASE_URL=${hasDb ? 'sí' : 'NO'}, JWT_SECRET=${hasJwt ? 'sí' : 'NO'}. ` +
+        'En Hostinger revisa que las variables estén guardadas y que la app se inicie después de configurarlas.'
+    );
   }
 }
 
