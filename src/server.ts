@@ -40,7 +40,8 @@ function runDbPushIfEnabled() {
   }
   console.log('🔄 Sincronizando schema con la BD (prisma db push)...');
   try {
-    const out = execSync(`node "${prismaCli}" db push --skip-generate`, {
+    const node = process.execPath;
+    const out = execSync(`"${node}" "${prismaCli}" db push --skip-generate`, {
       cwd: projectRoot,
       encoding: 'utf8',
       env: process.env,
