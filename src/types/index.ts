@@ -74,6 +74,8 @@ export interface CreateOrderDTO {
   dispatchDate: Date;
   creditDays: number;
   title?: string; // Título de la deuda asociada (opcional)
+  /** Monto de saldo excedente (créditos) a aplicar a esta nueva deuda. No puede superar el monto de la deuda ni el saldo disponible del proveedor. */
+  surplusAmountToApply?: number;
 }
 
 export interface UpdateOrderDTO {
@@ -105,6 +107,7 @@ export interface OrderResponse {
     status: DebtStatus;
     remainingAmount: number;
     initialAmount: number;
+    surplusAmountAtCreation?: number | null;
     dueDate: Date;
     title?: string | null;
     createdAt: Date;
@@ -133,6 +136,8 @@ export interface DebtResponse {
   title?: string | null;
   initialAmount: number;
   remainingAmount: number;
+  /** Monto de saldo excedente (créditos) aplicado al registrar esta deuda. null si no se aplicó. */
+  surplusAmountAtCreation?: number | null;
   status: DebtStatus;
   dueDate: Date;
   createdAt: Date;
@@ -151,9 +156,11 @@ export interface CreatePaymentDTO {
   senderEmail?: string;
   confirmationNumber?: string;
   paymentDate: Date;
-  exchangeRate?: number; // Tasa del dólar (opcional, solo para pagos en BS)
-  amountInBolivares?: number; // Monto en bolívares (opcional, solo para pagos en BS)
-  cashierId?: number; // ID del cajero que registra el pago (si no se envía, se usa el usuario autenticado)
+  exchangeRate?: number;
+  amountInBolivares?: number;
+  cashierId?: number;
+  surplusAction?: 'CREDIT' | 'APPLY_TO_DEBT';
+  surplusTargetDebtId?: number;
 }
 
 export interface PaymentResponse {
@@ -172,13 +179,13 @@ export interface PaymentResponse {
   senderEmail: string | null;
   confirmationNumber: string | null;
   paymentDate: Date;
-  /** URLs completas de las imágenes del comprobante (sincronizar con frontend como `receiptFiles`) */
   receiptFiles: string[];
   verified: boolean;
   shared: boolean;
   sharedAt: Date | null;
-  exchangeRate: number | null; // Tasa del dólar (opcional, solo para pagos en BS)
-  amountInBolivares: number | null; // Monto en bolívares (opcional, solo para pagos en BS)
+  exchangeRate: number | null;
+  amountInBolivares: number | null;
+  surplusAmount: number | null;
   createdBy: number;
   createdByUser?: {
     id: number;
@@ -206,6 +213,7 @@ export interface PaymentResponse {
     createdAt: Date;
     updatedAt: Date;
   };
+  credit?: CreditResponse | null;
 }
 
 export interface VerifyZelleDTO {
@@ -231,6 +239,8 @@ export interface SupplierDetailedReport {
   averagePayment: number;
   debts: DebtResponse[];
   payments: PaymentResponse[];
+  credits?: CreditResponse[];
+  totalCreditAvailable?: number;
   paymentsPagination?: {
     page: number;
     limit: number;
@@ -262,5 +272,44 @@ export interface PaginatedResponse<T> {
     total: number;
     totalPages: number;
   };
+}
+
+// Credit Types
+export type CreditStatus = 'AVAILABLE' | 'PARTIALLY_USED' | 'USED';
+
+export interface CreditResponse {
+  id: number;
+  paymentId: number;
+  originDebtId: number;
+  supplierId: number;
+  amount: number;
+  remaining: number;
+  status: CreditStatus;
+  description: string | null;
+  supplier?: {
+    id: number;
+    companyName: string;
+  };
+  payment?: {
+    id: number;
+    senderName: string;
+    paymentDate: Date;
+    amount: number;
+  };
+  originDebt?: {
+    id: number;
+    title: string | null;
+    supplier: {
+      id: number;
+      companyName: string;
+    };
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ApplyCreditDTO {
+  debtId: number;
+  amount: number;
 }
 

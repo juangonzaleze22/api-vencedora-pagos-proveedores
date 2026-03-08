@@ -55,15 +55,15 @@ function validateEnv(): EnvConfig {
 
   if (!dbUrl) {
     const msg =
-      'DATABASE_URL no está definida. Usa postgresql://... en local o mysql://... en producción.';
+      'DATABASE_URL no está definida. Usa mysql://usuario:contraseña@host:3306/nombre_bd (ej. Hostinger).';
     console.error('❌ ' + msg);
     throw new Error(msg);
   }
 
-  const validProtocol = /^(postgresql|postgres|mysql):\/\//i.test(dbUrl);
+  const validProtocol = /^mysql:\/\//i.test(dbUrl);
   if (!validProtocol) {
     const msg =
-      'DATABASE_URL debe empezar por postgresql:// (local) o mysql:// (ej. producción).';
+      'DATABASE_URL debe empezar por mysql:// (ej. mysql://usuario:contraseña@host:3306/base_datos).';
     console.error('❌ ' + msg);
     throw new Error(msg);
   }

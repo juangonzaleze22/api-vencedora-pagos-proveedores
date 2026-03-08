@@ -284,9 +284,15 @@ export function generateSupplierPaymentsPdf(
     doc.fillColor(COLORS.textMuted).fontSize(7);
     doc.text('Estado', x1, bodyY + row2Y, { width: colW });
     doc.text('Vence', x2, bodyY + row2Y, { width: colW });
+    doc.text('Saldo excedente asignado', x3, bodyY + row2Y, { width: colW });
     doc.fillColor(COLORS.text).fontSize(9);
     doc.text(DEBT_STATUS_LABELS[d.status], x1, bodyY + row2Y + 10, { width: colW });
     doc.text(formatDate(d.dueDate), x2, bodyY + row2Y + 10, { width: colW });
+    const saldoExcedenteLabel =
+      d.surplusAmountAtCreation != null && Number(d.surplusAmountAtCreation) > 0
+        ? `${formatCurrency(Number(d.surplusAmountAtCreation))} USD`
+        : '—';
+    doc.text(saldoExcedenteLabel, x3, bodyY + row2Y + 10, { width: colW });
     doc.y = footerY + footerH + 18;
   }
 

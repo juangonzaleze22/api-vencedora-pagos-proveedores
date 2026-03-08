@@ -71,7 +71,9 @@ export class PaymentController {
         paymentDate: req.body.paymentDate,
         exchangeRate: exchangeRateValue,
         amountInBolivares: amountInBolivaresValue,
-        cashierId
+        cashierId,
+        surplusAction: req.body.surplusAction as 'CREDIT' | 'APPLY_TO_DEBT' | undefined,
+        surplusTargetDebtId: req.body.surplusTargetDebtId ? parseInt(req.body.surplusTargetDebtId) : undefined
       };
 
       // Múltiples imágenes: array de nombres y rutas (se construyen las URLs en el servicio)

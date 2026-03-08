@@ -16,7 +16,8 @@ router.post(
     body('amount').isFloat({ min: 0.01 }).withMessage('El monto debe ser mayor a 0'),
     body('dispatchDate').isISO8601().withMessage('Fecha de despacho inválida'),
     body('creditDays').isInt({ min: 1 }).withMessage('Los días de crédito deben ser mayor a 0'),
-    body('title').optional().isString().withMessage('El título debe ser un texto')
+    body('title').optional().isString().withMessage('El título debe ser un texto'),
+    body('surplusAmountToApply').optional().isFloat({ min: 0 }).withMessage('El saldo excedente a aplicar debe ser un número mayor o igual a 0')
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR', 'CAJERO'),
   orderController.create.bind(orderController)

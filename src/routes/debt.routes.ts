@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { DebtService } from '../services/debt.service';
 import { PaymentService } from '../services/payment.service';
+import { CreditService } from '../services/credit.service';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 import { param, body } from 'express-validator';
 import { validate } from '../middleware/validation.middleware';
@@ -10,6 +11,7 @@ import prisma from '../config/database';
 const router = Router();
 const debtService = new DebtService();
 const paymentService = new PaymentService();
+const creditService = new CreditService();
 
 router.use(authenticate);
 
@@ -114,18 +116,28 @@ router.get(
         }
       }
 
-      // Verificar que la deuda existe y obtener información básica
-      const debt = await prisma.debt.findUnique({
+      // Verificar que la deuda existe y obtener información completa (incl. surplusAmountAtCreation)
+      const debtRow = await prisma.debt.findUnique({
         where: { id: debtId },
         select: {
           id: true,
+          orderId: true,
           supplierId: true,
+          title: true,
+          initialAmount: true,
           remainingAmount: true,
-          initialAmount: true
+          surplusAmountAtCreation: true,
+          status: true,
+          dueDate: true,
+          createdAt: true,
+          updatedAt: true,
+          supplier: {
+            select: { id: true, companyName: true, taxId: true, phone: true }
+          }
         }
       });
-      
-      if (!debt) {
+
+      if (!debtRow) {
         throw new AppError('Deuda no encontrada', 404);
       }
 
@@ -140,21 +152,48 @@ router.get(
 
       // Obtener TODOS los pagos ACTIVOS de la deuda (sin paginación) para calcular estadísticas
       // IMPORTANTE: Las estadísticas SIEMPRE excluyen pagos eliminados
-      // Aplicando los mismos filtros de fecha
       const allPaymentsResult = await paymentService.getPaymentsByDebt(debtId, {
-        limit: 10000, // Obtener todos los pagos
+        limit: 10000,
         startDate,
         endDate,
-        includeDeleted: false // Estadísticas siempre sin eliminados
+        includeDeleted: false
       });
 
-      // Calcular estadísticas basadas en todos los pagos filtrados
       const totalPaid = allPaymentsResult.data.reduce((sum, payment) => sum + payment.amount, 0);
       const paymentCount = allPaymentsResult.pagination.total;
       const averagePayment = paymentCount > 0 ? totalPaid / paymentCount : 0;
 
+      // Saldo excedente del proveedor (créditos disponibles)
+      const totalCreditAvailable = await creditService.getTotalAvailableCredit(debtRow.supplierId);
+
+      // Número secuencial de la deuda para este proveedor
+      const allDebtIds = await prisma.debt.findMany({
+        where: { supplierId: debtRow.supplierId },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true }
+      });
+      const debtNumber = allDebtIds.findIndex((d: { id: number }) => d.id === debtId) + 1;
+
+      const debt = {
+        id: debtRow.id,
+        orderId: debtRow.orderId,
+        supplierId: debtRow.supplierId,
+        supplier: debtRow.supplier,
+        title: debtRow.title ?? undefined,
+        initialAmount: Number(debtRow.initialAmount),
+        remainingAmount: Number(debtRow.remainingAmount),
+        surplusAmountAtCreation: debtRow.surplusAmountAtCreation != null ? Number(debtRow.surplusAmountAtCreation) : null,
+        status: debtRow.status,
+        dueDate: debtRow.dueDate,
+        createdAt: debtRow.createdAt,
+        updatedAt: debtRow.updatedAt,
+        debtNumber
+      };
+
       res.json({
         success: true,
+        debt,
+        totalCreditAvailable,
         data: result.data,
         pagination: result.pagination,
         statistics: {

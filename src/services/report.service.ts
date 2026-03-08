@@ -3,10 +3,12 @@ import { DashboardStats, SupplierDetailedReport } from '../types';
 import { SupplierService } from './supplier.service';
 import { DebtService } from './debt.service';
 import { PaymentService } from './payment.service';
+import { CreditService } from './credit.service';
 
 const supplierService = new SupplierService();
 const debtService = new DebtService();
 const paymentService = new PaymentService();
+const creditService = new CreditService();
 
 export class ReportService {
   async getDashboardStats(): Promise<DashboardStats> {
@@ -106,15 +108,20 @@ export class ReportService {
 
       console.log('✅ Reporte detallado generado exitosamente');
 
-      // NOTA: Los pagos ahora se obtienen mediante el endpoint específico /api/debts/:debtId/payments
-      // Esto hace el reporte más ligero y permite al frontend cargar los pagos solo cuando se selecciona una deuda
+      // Obtener créditos disponibles del proveedor
+      console.log('🔍 Obteniendo créditos del proveedor...');
+      const creditsResult = await creditService.listCredits({ supplierId, limit: 1000 });
+      console.log(`✅ Créditos obtenidos: ${creditsResult.data.length}, total disponible: $${creditsResult.summary.totalAvailable.toFixed(2)}`);
+
       return {
         supplier,
         totalPaid,
         paymentCount,
         averagePayment,
         debts,
-        payments: [], // Ya no incluimos pagos aquí, se obtienen por endpoint separado
+        payments: [],
+        credits: creditsResult.data,
+        totalCreditAvailable: creditsResult.summary.totalAvailable,
         paymentsPagination: undefined
       };
     } catch (error: any) {

@@ -2,14 +2,17 @@ import prisma from '../config/database';
 import { Prisma } from '@prisma/client';
 import { CreateOrderDTO, UpdateOrderDTO, OrderResponse, PaginationParams, PaginatedResponse } from '../types';
 import { SupplierService } from './supplier.service';
+import { CreditService } from './credit.service';
 import { AppError } from '../middleware/error.middleware';
 import { getReceiptFileNames, buildReceiptUrls } from '../utils/receiptUrls';
 
 const supplierService = new SupplierService();
+const creditService = new CreditService();
 
 export class OrderService {
   async createOrder(data: CreateOrderDTO, userId: number): Promise<OrderResponse> {
     const { supplierId, amount, dispatchDate, creditDays } = data;
+    const surplusAmountToApply = Number(data.surplusAmountToApply ?? 0);
 
     // Verificar que el proveedor existe
     const supplier = await prisma.supplier.findUnique({
@@ -17,7 +20,24 @@ export class OrderService {
     });
 
     if (!supplier) {
-      throw new Error('Proveedor no encontrado');
+      throw new AppError('Proveedor no encontrado', 404);
+    }
+
+    // Validaciones del saldo excedente a aplicar
+    if (surplusAmountToApply > 0) {
+      if (surplusAmountToApply > amount) {
+        throw new AppError(
+          'El saldo excedente a aplicar no puede ser mayor al monto de la nueva deuda',
+          400
+        );
+      }
+      const totalAvailableCredit = await creditService.getTotalAvailableCredit(supplierId);
+      if (surplusAmountToApply > totalAvailableCredit) {
+        throw new AppError(
+          `El saldo excedente a aplicar (${surplusAmountToApply}) supera el saldo excedente disponible del proveedor (${totalAvailableCredit.toFixed(2)})`,
+          400
+        );
+      }
     }
 
     // Calcular fecha de vencimiento
@@ -25,50 +45,72 @@ export class OrderService {
     const dueDate = new Date(dispatch);
     dueDate.setDate(dueDate.getDate() + creditDays);
 
-    // Crear pedido
-    const order = await prisma.order.create({
-      data: {
-        supplierId,
-        amount,
-        dispatchDate: dispatch,
-        creditDays,
-        dueDate,
-        createdBy: userId
-      },
-      include: {
-        supplier: {
-          select: {
-            id: true,
-            companyName: true,
-            taxId: true,
-            phone: true
-          }
+    const remainingDebtAmount = amount - surplusAmountToApply;
+    const debtStatus = remainingDebtAmount <= 0 ? 'PAID' : 'PENDING';
+    const debtAmountToAddToSupplier = remainingDebtAmount; // lo que realmente suma a la deuda total del proveedor
+
+    const { order, debt } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Crear pedido
+      const newOrder = await tx.order.create({
+        data: {
+          supplierId,
+          amount,
+          dispatchDate: dispatch,
+          creditDays,
+          dueDate,
+          createdBy: userId
         },
-        createdByUser: {
-          select: {
-            id: true,
-            nombre: true,
-            email: true
+        include: {
+          supplier: {
+            select: {
+              id: true,
+              companyName: true,
+              taxId: true,
+              phone: true
+            }
+          },
+          createdByUser: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
           }
         }
-      }
-    });
+      });
 
-    // Crear deuda automáticamente
-    const debt = await prisma.debt.create({
-      data: {
-        orderId: order.id,
-        supplierId,
-        title: data.title ?? null,
-        initialAmount: amount,
-        remainingAmount: amount,
-        dueDate,
-        status: 'PENDING'
-      }
-    });
+      // Crear deuda: remainingAmount ya descontando el excedente aplicado
+      const newDebt = await tx.debt.create({
+        data: {
+          orderId: newOrder.id,
+          supplierId,
+          title: data.title ?? null,
+          initialAmount: amount,
+          remainingAmount: remainingDebtAmount,
+          surplusAmountAtCreation: surplusAmountToApply > 0 ? surplusAmountToApply : null,
+          dueDate,
+          status: debtStatus
+        }
+      });
 
-    // Actualizar total de deuda del proveedor
-    await supplierService.updateSupplierTotalDebt(supplierId, Number(amount));
+      // Consumir saldo excedente (créditos) del proveedor
+      if (surplusAmountToApply > 0) {
+        await creditService.consumeCreditFromSupplier(supplierId, surplusAmountToApply, tx);
+      }
+
+      // Actualizar total de deuda del proveedor (solo lo que no se cubrió con excedente)
+      if (debtAmountToAddToSupplier > 0) {
+        await tx.supplier.update({
+          where: { id: supplierId },
+          data: {
+            totalDebt: { increment: debtAmountToAddToSupplier },
+            status: 'PENDING'
+          }
+        });
+      }
+
+      return { order: newOrder, debt: newDebt };
+    });
 
     return {
       id: order.id,
@@ -87,6 +129,7 @@ export class OrderService {
         status: debt.status,
         remainingAmount: Number(debt.remainingAmount),
         initialAmount: Number(debt.initialAmount),
+        surplusAmountAtCreation: debt.surplusAmountAtCreation != null ? Number(debt.surplusAmountAtCreation) : null,
         dueDate: debt.dueDate,
         title: debt.title ?? undefined,
         createdAt: debt.createdAt,
@@ -160,6 +203,7 @@ export class OrderService {
         status: order.debt.status,
         remainingAmount: Number(order.debt.remainingAmount),
         initialAmount: Number(order.debt.initialAmount),
+        surplusAmountAtCreation: order.debt.surplusAmountAtCreation != null ? Number(order.debt.surplusAmountAtCreation) : null,
         dueDate: order.debt.dueDate,
         title: order.debt.title ?? undefined,
         createdAt: order.debt.createdAt,
@@ -253,6 +297,7 @@ export class OrderService {
           status: order.debt.status,
           remainingAmount: Number(order.debt.remainingAmount),
           initialAmount: Number(order.debt.initialAmount),
+          surplusAmountAtCreation: order.debt.surplusAmountAtCreation != null ? Number(order.debt.surplusAmountAtCreation) : null,
           dueDate: order.debt.dueDate,
           title: order.debt.title ?? undefined,
           createdAt: order.debt.createdAt,
@@ -324,6 +369,7 @@ export class OrderService {
           status: order.debt.status,
           remainingAmount: Number(order.debt.remainingAmount),
           initialAmount: Number(order.debt.initialAmount),
+          surplusAmountAtCreation: order.debt.surplusAmountAtCreation != null ? Number(order.debt.surplusAmountAtCreation) : null,
           dueDate: order.debt.dueDate,
           title: order.debt.title ?? undefined,
           createdAt: order.debt.createdAt,
@@ -612,6 +658,7 @@ export class OrderService {
           status: orderWithDebt.debt.status,
           remainingAmount: Number(orderWithDebt.debt.remainingAmount),
           initialAmount: Number(orderWithDebt.debt.initialAmount),
+          surplusAmountAtCreation: orderWithDebt.debt.surplusAmountAtCreation != null ? Number(orderWithDebt.debt.surplusAmountAtCreation) : null,
           dueDate: orderWithDebt.debt.dueDate,
           title: orderWithDebt.debt.title ?? undefined,
           createdAt: orderWithDebt.debt.createdAt,

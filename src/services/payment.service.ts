@@ -29,7 +29,7 @@ export class PaymentService {
       console.log('💳 PaymentService.createPayment - Iniciando...');
       console.log('Datos recibidos:', { ...data, receiptFileNames, receiptFilePathsCount: receiptFilePaths?.length });
       
-      const { debtId, supplierId, amount, paymentMethod, senderName, senderEmail, confirmationNumber, paymentDate, exchangeRate, amountInBolivares, cashierId } = data;
+      const { debtId, supplierId, amount, paymentMethod, senderName, senderEmail, confirmationNumber, paymentDate, exchangeRate, amountInBolivares, cashierId, surplusAction, surplusTargetDebtId } = data;
 
       // Determinar el createdBy: si se envía cashierId, validar que existe; si no, usar userId autenticado
       const effectiveCreatedBy = cashierId || userId;
@@ -47,10 +47,17 @@ export class PaymentService {
       }
 
       console.log('🔍 Validando deuda...');
-      // Validar que la deuda existe y pertenece al proveedor
+      // Validar que la deuda existe y pertenece al proveedor (select explícito para evitar columnas que no existan aún en la BD)
       const debt = await prisma.debt.findUnique({
         where: { id: debtId },
-        include: { supplier: true }
+        select: {
+          id: true,
+          supplierId: true,
+          initialAmount: true,
+          remainingAmount: true,
+          status: true,
+          supplier: { select: { id: true, companyName: true } }
+        }
       });
 
       if (!debt) {
@@ -89,26 +96,15 @@ export class PaymentService {
         throw new Error('Esta deuda ya está completamente pagada. No se pueden registrar más pagos');
       }
 
-      // Validar que el monto no exceda el monto restante
       const paymentAmount = Number(amount);
       const remainingAmount = Number(debt.remainingAmount);
-      
-      if (paymentAmount > remainingAmount) {
-        console.error('❌ Monto excede el restante:', {
-          paymentAmount,
-          remainingAmount,
-          difference: paymentAmount - remainingAmount
-        });
-        throw new Error(
-          `El monto del pago ($${paymentAmount.toFixed(2)}) excede el monto restante de la deuda ($${remainingAmount.toFixed(2)}). ` +
-          `Monto máximo permitido: $${remainingAmount.toFixed(2)}`
-        );
-      }
+      const surplusAmount = Math.max(0, paymentAmount - remainingAmount);
 
       console.log('✅ Validaciones de monto pasadas:', {
         paymentAmount,
         remainingAmount,
-        newRemainingAfterPayment: (remainingAmount - paymentAmount).toFixed(2)
+        surplusAmount: surplusAmount.toFixed(2),
+        newRemainingAfterPayment: Math.max(0, remainingAmount - paymentAmount).toFixed(2)
       });
 
       // Validar confirmationNumber para Zelle y Transfer
@@ -154,6 +150,7 @@ export class PaymentService {
           receiptFiles: receiptFilesJson,
           exchangeRate: exchangeRate ? exchangeRate : null,
           amountInBolivares: amountInBolivares ? amountInBolivares : null,
+          surplusAmount: surplusAmount > 0 ? surplusAmount : null,
           verified: false,
           createdBy: effectiveCreatedBy
         },
@@ -236,9 +233,13 @@ export class PaymentService {
       }
 
       console.log('🔄 Actualizando total de deuda del proveedor...');
-      // Actualizar total de deuda del proveedor (restar el monto pagado)
-      await supplierService.updateSupplierTotalDebt(supplierId, -Number(amount));
-      console.log('✅ Total de deuda del proveedor actualizado');
+      const amountAppliedToDebt = Math.min(paymentAmount, remainingAmount);
+      await supplierService.updateSupplierTotalDebt(supplierId, -amountAppliedToDebt);
+      console.log('✅ Total de deuda del proveedor actualizado:', {
+        montoTotalPago: paymentAmount,
+        montoAplicadoADeuda: amountAppliedToDebt,
+        excedente: surplusAmount
+      });
 
       // Obtener el proveedor actualizado para verificar el nuevo total
       const updatedSupplier = await prisma.supplier.findUnique({
@@ -255,15 +256,77 @@ export class PaymentService {
       }
 
       console.log('🔄 Actualizando última fecha de pago...');
-      // Actualizar última fecha de pago del proveedor
       await supplierService.updateSupplierLastPaymentDate(supplierId, new Date(paymentDate));
       console.log('✅ Última fecha de pago actualizada');
 
-      // Construir la URL del comprobante si hay archivo
+      // Manejar excedente
+      let creditCreated = null;
+      if (surplusAmount > 0) {
+        console.log(`💰 Excedente detectado: $${surplusAmount.toFixed(2)}`);
+
+        if (surplusAction === 'APPLY_TO_DEBT' && surplusTargetDebtId) {
+          const targetDebt = await prisma.debt.findUnique({
+            where: { id: surplusTargetDebtId }
+          });
+
+          if (!targetDebt) {
+            throw new AppError('Deuda destino para el excedente no encontrada', 400);
+          }
+
+          if (targetDebt.status === 'PAID' || Number(targetDebt.remainingAmount) <= 0) {
+            throw new AppError('La deuda destino ya está completamente pagada', 400);
+          }
+
+          const targetRemaining = Number(targetDebt.remainingAmount);
+          const amountForTarget = Math.min(surplusAmount, targetRemaining);
+
+          await prisma.debt.update({
+            where: { id: surplusTargetDebtId },
+            data: {
+              remainingAmount: Math.max(0, targetRemaining - amountForTarget),
+              status: targetRemaining - amountForTarget <= 0 ? 'PAID' : 'PENDING'
+            }
+          });
+
+          console.log(`✅ Excedente aplicado a deuda #${surplusTargetDebtId}: $${amountForTarget.toFixed(2)}`);
+
+          await supplierService.updateSupplierTotalDebt(targetDebt.supplierId, -amountForTarget);
+
+          const leftover = surplusAmount - amountForTarget;
+          if (leftover > 0) {
+            creditCreated = await prisma.credit.create({
+              data: {
+                paymentId: payment.id,
+                originDebtId: debtId,
+                supplierId,
+                amount: leftover,
+                remaining: leftover,
+                status: 'AVAILABLE',
+                description: `Excedente pago #${payment.id} - sobrante tras aplicar a deuda #${surplusTargetDebtId}`
+              }
+            });
+            console.log(`💳 Crédito creado por sobrante: $${leftover.toFixed(2)}`);
+          }
+        } else {
+          creditCreated = await prisma.credit.create({
+            data: {
+              paymentId: payment.id,
+              originDebtId: debtId,
+              supplierId,
+              amount: surplusAmount,
+              remaining: surplusAmount,
+              status: 'AVAILABLE',
+              description: `Excedente pago #${payment.id}`
+            }
+          });
+          console.log(`💳 Crédito creado para proveedor #${supplierId}: $${surplusAmount.toFixed(2)}`);
+        }
+      }
+
       const names = getReceiptFileNames(payment);
       const receiptFilesUrls = buildReceiptUrls(payment.id, names);
 
-      const response = {
+      const response: PaymentResponse = {
         id: payment.id,
         debtId: payment.debtId,
         supplierId: payment.supplierId,
@@ -280,16 +343,31 @@ export class PaymentService {
         sharedAt: payment.sharedAt || null,
         exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
         amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+        surplusAmount: surplusAmount > 0 ? surplusAmount : null,
         createdBy: payment.createdBy,
         createdByUser: payment.createdByUser || null,
         createdAt: payment.createdAt,
-        updatedAt: payment.updatedAt
+        updatedAt: payment.updatedAt,
+        credit: creditCreated ? {
+          id: creditCreated.id,
+          paymentId: creditCreated.paymentId,
+          originDebtId: creditCreated.originDebtId,
+          supplierId: creditCreated.supplierId,
+          amount: Number(creditCreated.amount),
+          remaining: Number(creditCreated.remaining),
+          status: creditCreated.status as any,
+          description: creditCreated.description,
+          createdAt: creditCreated.createdAt,
+          updatedAt: creditCreated.updatedAt
+        } : null
       };
 
       console.log('✅ PaymentService.createPayment - Completado exitosamente');
       console.log('💰 Resumen del pago:', {
         pagoId: response.id,
         montoPagado: response.amount,
+        excedente: surplusAmount > 0 ? surplusAmount.toFixed(2) : 'N/A',
+        creditoCreado: creditCreated?.id || 'N/A',
         deudaId: response.debtId,
         montoRestanteDeuda: updatedDebt?.remainingAmount,
         estadoDeuda: updatedDebt?.status,
@@ -374,6 +452,7 @@ export class PaymentService {
       sharedAt: payment.sharedAt || null,
       exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
       amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+      surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
       createdBy: payment.createdBy,
       createdByUser: payment.createdByUser || null,
       deletedAt: payment.deletedAt || null,
@@ -497,6 +576,7 @@ export class PaymentService {
             sharedAt: payment.sharedAt || null,
             exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
             amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+            surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
             createdBy: payment.createdBy,
             createdByUser: payment.createdByUser || null,
             deletedAt: payment.deletedAt || null,
@@ -630,6 +710,7 @@ export class PaymentService {
           verified: payment.verified,
           exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
           amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+          surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
           createdBy: payment.createdBy,
           createdByUser: payment.createdByUser,
           deletedAt: payment.deletedAt || null,
@@ -742,6 +823,7 @@ export class PaymentService {
             verified: payment.verified,
             exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
             amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+            surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
             createdBy: payment.createdBy,
             createdByUser: payment.createdByUser || null,
             deletedAt: payment.deletedAt || null,
@@ -836,6 +918,7 @@ export class PaymentService {
             sharedAt: payment.sharedAt || null,
             exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
             amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+            surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
             createdBy: payment.createdBy,
             createdByUser: payment.createdByUser || null,
             deletedAt: payment.deletedAt || null,
@@ -923,6 +1006,7 @@ export class PaymentService {
       sharedAt: payment.sharedAt || null,
       exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
       amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+      surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
       createdBy: payment.createdBy,
       createdByUser: payment.createdByUser || null,
       deletedAt: payment.deletedAt || null,
@@ -997,6 +1081,7 @@ export class PaymentService {
         sharedAt: payment.sharedAt || null,
         exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
         amountInBolivares: payment.amountInBolivares ? Number(payment.amountInBolivares) : null,
+        surplusAmount: payment.surplusAmount ? Number(payment.surplusAmount) : null,
         createdBy: payment.createdBy,
         createdByUser: payment.createdByUser || null,
         deletedAt: payment.deletedAt || null,
@@ -1349,6 +1434,7 @@ export class PaymentService {
         sharedAt: updatedPayment.sharedAt || null,
         exchangeRate: updatedPayment.exchangeRate ? Number(updatedPayment.exchangeRate) : null,
         amountInBolivares: updatedPayment.amountInBolivares ? Number(updatedPayment.amountInBolivares) : null,
+        surplusAmount: updatedPayment.surplusAmount ? Number(updatedPayment.surplusAmount) : null,
         createdBy: updatedPayment.createdBy,
         createdByUser: updatedPayment.createdByUser || null,
         createdAt: updatedPayment.createdAt,
@@ -1513,6 +1599,7 @@ export class PaymentService {
         sharedAt: deletedPayment.sharedAt || null,
         exchangeRate: deletedPayment.exchangeRate ? Number(deletedPayment.exchangeRate) : null,
         amountInBolivares: deletedPayment.amountInBolivares ? Number(deletedPayment.amountInBolivares) : null,
+        surplusAmount: deletedPayment.surplusAmount ? Number(deletedPayment.surplusAmount) : null,
         createdBy: deletedPayment.createdBy,
         createdByUser: deletedPayment.createdByUser || null,
         deletedAt: deletedPayment.deletedAt || null,
@@ -1646,7 +1733,7 @@ export class PaymentService {
         const montoBsNum = updatedPayment.amountInBolivares != null
           ? Number(updatedPayment.amountInBolivares)
           : Number(updatedPayment.amount) * tasaNum;
-        message += `*Tasa:* ${formatVES(tasaNum, 2)}\n`;
+        message += `*Tasa Bs:* ${formatVES(tasaNum, 2)}\n`;
         message += `*Monto en Bs:* ${formatVES(montoBsNum, 2)}\n`;
       }
       message += `*Método de Pago:* ${paymentMethodText}\n`;
@@ -1695,6 +1782,7 @@ export class PaymentService {
         sharedAt: updatedPayment.sharedAt,
         exchangeRate: updatedPayment.exchangeRate ? Number(updatedPayment.exchangeRate) : null,
         amountInBolivares: updatedPayment.amountInBolivares ? Number(updatedPayment.amountInBolivares) : null,
+        surplusAmount: updatedPayment.surplusAmount ? Number(updatedPayment.surplusAmount) : null,
         createdBy: updatedPayment.createdBy,
         createdByUser: updatedPayment.createdByUser || null,
         deletedAt: updatedPayment.deletedAt || null,

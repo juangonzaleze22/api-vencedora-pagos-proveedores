@@ -171,6 +171,16 @@ router.post(
         }
       }
       return true;
+    }),
+    body('surplusAction').optional().isIn(['CREDIT', 'APPLY_TO_DEBT']).withMessage('Acción de excedente inválida'),
+    body('surplusTargetDebtId').optional().custom((value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const num = parseInt(value);
+        if (isNaN(num) || num <= 0) {
+          throw new Error('ID de deuda destino inválido');
+        }
+      }
+      return true;
     })
   ]),
   authorize('ADMINISTRADOR', 'SUPERVISOR', 'CAJERO'),
