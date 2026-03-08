@@ -28,12 +28,19 @@ console.log('PORT ==>>', PORT);
 
 // Sincronizar schema con la BD al arrancar (útil en Hostinger sin consola).
 // Actívalo en el panel: RUN_DB_PUSH_ON_START = true
+// Usa node + ruta a prisma CLI (en Hostinger npx no suele estar en el PATH del proceso).
 function runDbPushIfEnabled() {
   if (process.env.RUN_DB_PUSH_ON_START !== 'true') return;
   const projectRoot = path.resolve(__dirname, '..');
+  const prismaCli = path.join(projectRoot, 'node_modules', 'prisma', 'build', 'index.js');
+  const fs = require('fs');
+  if (!fs.existsSync(prismaCli)) {
+    console.warn('⚠️ Prisma CLI no encontrado en', prismaCli, '- se omite db push.');
+    return;
+  }
   console.log('🔄 Sincronizando schema con la BD (prisma db push)...');
   try {
-    const out = execSync('npx prisma db push --skip-generate', {
+    const out = execSync(`node "${prismaCli}" db push --skip-generate`, {
       cwd: projectRoot,
       encoding: 'utf8',
       env: process.env,
@@ -42,8 +49,7 @@ function runDbPushIfEnabled() {
     console.log('✅ Schema sincronizado.');
   } catch (e: any) {
     const msg = e?.stderr || e?.stdout || e?.message || String(e);
-    console.error('❌ Error al sincronizar schema (la app seguirá; revisa que prisma/ esté en el servidor y DATABASE_URL sea correcta):', msg);
-    // No lanzar: permitir que la app arranque por si la BD ya está bien
+    console.error('❌ Error al sincronizar schema (la app seguirá):', msg);
   }
 }
 
