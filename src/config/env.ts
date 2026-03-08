@@ -22,7 +22,13 @@ for (const envPath of envPaths) {
   }
 }
 if (!loaded && process.env.NODE_ENV !== 'test') {
-  console.warn(`⚠️ No se encontró .env en: ${envPaths.join(' ni en ')}. Se usan variables del sistema.`);
+  // En hosting (ej. Hostinger) las variables suelen venir del panel, no de un archivo .env
+  const hasEnvVars = !!(process.env.DATABASE_URL || process.env.JWT_SECRET);
+  if (hasEnvVars) {
+    console.log('ℹ️ No hay archivo .env; usando variables del panel/sistema (correcto en hosting).');
+  } else {
+    console.warn(`⚠️ No se encontró .env en: ${envPaths.join(' ni en ')}. Define DATABASE_URL y JWT_SECRET en el panel o en .env.`);
+  }
 }
 
 interface EnvConfig {
