@@ -69,15 +69,16 @@ function validateEnv(): EnvConfig {
 
   if (!dbUrl) {
     const msg =
-      'DATABASE_URL no está definida. Usa mysql://usuario:contraseña@host:3306/nombre_bd (ej. Hostinger).';
+      'DATABASE_URL no está definida. En Hostinger usa mysql://usuario:contraseña@127.0.0.1:3306/nombre_bd';
     console.error('❌ ' + msg);
     throw new Error(msg);
   }
 
   const validProtocol = /^mysql:\/\//i.test(dbUrl);
   if (!validProtocol) {
+    const protocol = dbUrl.match(/^[a-z]+/)?.[0] || 'vacío o inválido';
     const msg =
-      'DATABASE_URL debe empezar por mysql:// (ej. mysql://usuario:contraseña@host:3306/base_datos).';
+      `DATABASE_URL debe empezar por mysql:// (Hostinger usa MySQL). Valor recibido empieza con: "${protocol}".`;
     console.error('❌ ' + msg);
     throw new Error(msg);
   }

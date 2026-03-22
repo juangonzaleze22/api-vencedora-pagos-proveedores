@@ -1,4 +1,32 @@
-# Configuración Node.js en Hostinger – Error "Cannot find module .../dist/server.js"
+# Configuración Node.js en Hostinger – Errores frecuentes
+
+## Configuración recomendada para que el build funcione
+
+| Campo | Valor |
+|-------|--------|
+| **Package manager** | **npm** (no yarn ni pnpm) |
+| **Node version** | **18** o **20** (recomendado **20** LTS). En el panel de Hostinger elige Node 20 si está disponible. |
+| **Build command** | `npm run build:deploy` (recomendado) o `npm run build` si tienes `DATABASE_URL` en el panel antes del build. |
+| **Output Directory** | **`dist`** |
+| **Entry file** | **`dist/server.js`** |
+| **Application root** | `public_html` (o la carpeta donde está el proyecto), **sin** `/` al final. |
+
+- **`build:deploy`**: solo ejecuta `prisma generate` y `tsc` (no necesita base de datos durante el build). Las tablas se crean/actualizan al arrancar si configuras `RUN_DB_PUSH_ON_START=true`.
+- **`build`**: ejecuta además `prisma db push`; requiere `DATABASE_URL` definida en el panel antes del build.
+
+---
+
+## Error "Failed to build the application" / Output directory null
+
+Si el build termina bien en local pero en Hostinger ves **"Failed to build the application"** y el mensaje indica que el **directorio de salida** no está definido (output directory is null), hay que indicar dónde está el resultado del build:
+
+- **Output Directory** (o "Build output directory"): pon **`dist`**
+
+El proyecto compila TypeScript a la carpeta `dist/`; si el panel no sabe cuál es esa carpeta, el despliegue falla.
+
+---
+
+## Error "Cannot find module .../dist/server.js"
 
 Si ves en los logs:
 
@@ -13,6 +41,7 @@ En la sección donde configuras la **aplicación Node.js** (Application / Node.j
 
 | Campo | Valor correcto | Evitar |
 |-------|----------------|--------|
+| **Output Directory** (o "Build output directory") | **`dist`** | dejar vacío o null |
 | **Application root** (o "Start path") | `public_html` **sin barra al final** | `public_html/` |
 | **Entry file** (o "Application startup file") | `dist/server.js` **sin barra al inicio** | `/dist/server.js` |
 
@@ -66,7 +95,11 @@ Si tu plan de Hostinger permite **Variables de entorno** en la configuración de
 
 ## Resumen
 
-1. **Application root**: carpeta del proyecto, **sin** `/` al final (ej: `public_html`).
-2. **Entry file**: `dist/server.js`, **sin** `/` al inicio.
-3. **Archivo `.env`**: crear en `public_html/.env` con `DATABASE_URL` (o configurar la variable en el panel).
-4. Tras cambiar, guardar y reiniciar la aplicación Node.js en el panel.
+1. **Package manager**: **npm**.
+2. **Node version**: **18** o **20** (recomendado **20**).
+3. **Build command**: **`npm run build:deploy`** (evita fallos si no hay `DATABASE_URL` en el build).
+4. **Output Directory**: **`dist`**.
+5. **Application root**: carpeta del proyecto, **sin** `/` al final (ej: `public_html`).
+6. **Entry file**: **`dist/server.js`**, **sin** `/` al inicio.
+7. **Archivo `.env`** o variables en el panel: `DATABASE_URL`, `JWT_SECRET`, y opcionalmente **`RUN_DB_PUSH_ON_START=true`** para crear/actualizar tablas al arrancar.
+8. Tras cambiar, guardar y reiniciar la aplicación Node.js en el panel.

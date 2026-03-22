@@ -29,20 +29,13 @@ export class SupplierController {
   async getAll(req: Request, res: Response, next: NextFunction) {
     try {
       const search = req.query.search as string;
-      const page = req.query.page ? parseInt(req.query.page as string) : undefined;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
       const status = req.query.status as any;
 
-      const result = await supplierService.searchSuppliers(search, {
-        page,
-        limit,
-        status
-      });
+      const result = await supplierService.searchSuppliers(search, { status });
 
       res.json({
         success: true,
-        data: result.data,
-        pagination: result.pagination
+        data: result.data
       });
     } catch (error: any) {
       next(error);

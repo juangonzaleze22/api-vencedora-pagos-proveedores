@@ -1,5 +1,7 @@
 import prisma from '../config/database';
 import {
+  CashierPaymentsResponse,
+  CashierPaymentsSummary,
   CreatePaymentDTO,
   PaymentResponse,
   PaginationParams,
@@ -29,7 +31,7 @@ export class PaymentService {
       console.log('💳 PaymentService.createPayment - Iniciando...');
       console.log('Datos recibidos:', { ...data, receiptFileNames, receiptFilePathsCount: receiptFilePaths?.length });
       
-      const { debtId, supplierId, amount, paymentMethod, senderName, senderEmail, confirmationNumber, paymentDate, exchangeRate, amountInBolivares, cashierId, surplusAction, surplusTargetDebtId } = data;
+      const { debtId, supplierId, amount, paymentMethod, senderName, senderEmail, confirmationNumber, paymentDate, nota, exchangeRate, amountInBolivares, cashierId, surplusAction, surplusTargetDebtId } = data;
 
       // Determinar el createdBy: si se envía cashierId, validar que existe; si no, usar userId autenticado
       const effectiveCreatedBy = cashierId || userId;
@@ -146,6 +148,7 @@ export class PaymentService {
           senderEmail: senderEmail || null,
           confirmationNumber: confirmationNumber || null,
           paymentDate: new Date(paymentDate),
+          nota: nota || null,
           receiptFile: null,
           receiptFiles: receiptFilesJson,
           exchangeRate: exchangeRate ? exchangeRate : null,
@@ -337,6 +340,7 @@ export class PaymentService {
         senderEmail: payment.senderEmail,
         confirmationNumber: payment.confirmationNumber,
         paymentDate: payment.paymentDate,
+        nota: payment.nota || null,
         receiptFiles: receiptFilesUrls,
         verified: payment.verified,
         shared: payment.shared || false,
@@ -446,6 +450,7 @@ export class PaymentService {
       senderEmail: payment.senderEmail,
       confirmationNumber: payment.confirmationNumber,
       paymentDate: payment.paymentDate,
+      nota: payment.nota || null,
       receiptFiles: receiptFilesUrls,
       verified: payment.verified,
       shared: payment.shared || false,
@@ -570,6 +575,7 @@ export class PaymentService {
             senderEmail: payment.senderEmail,
             confirmationNumber: payment.confirmationNumber,
             paymentDate: payment.paymentDate,
+            nota: payment.nota || null,
             receiptFiles: receiptFilesUrls,
             verified: payment.verified,
             shared: payment.shared || false,
@@ -607,7 +613,7 @@ export class PaymentService {
   async getPaymentsByCashier(
     cashierId: number,
     params?: PaginationParams & { startDate?: Date; endDate?: Date; paymentMethod?: string }
-  ): Promise<PaginatedResponse<PaymentResponse>> {
+  ): Promise<CashierPaymentsResponse> {
     const page = params?.page || 1;
     const limit = params?.limit || 10;
     const skip = (page - 1) * limit;
@@ -641,7 +647,13 @@ export class PaymentService {
       }
     }
 
-    const [payments, total] = await Promise.all([
+    const [
+      payments,
+      total,
+      aggregateTotals,
+      groupByMethod,
+      suppliersInRange
+    ] = await Promise.all([
       prisma.payment.findMany({
         where,
         include: {
@@ -688,10 +700,46 @@ export class PaymentService {
         skip,
         take: limit
       }),
-      prisma.payment.count({ where })
+      prisma.payment.count({ where }),
+      prisma.payment.aggregate({
+        where,
+        _sum: { amount: true, amountInBolivares: true }
+      }),
+      prisma.payment.groupBy({
+        by: ['paymentMethod'],
+        where,
+        _sum: { amount: true },
+        _count: { _all: true }
+      }),
+      prisma.payment.groupBy({
+        by: ['supplierId'],
+        where
+      })
     ]);
 
+    const byPaymentMethod: CashierPaymentsSummary['byPaymentMethod'] = {
+      ZELLE: { count: 0, totalUsd: 0 },
+      TRANSFER: { count: 0, totalUsd: 0 },
+      CASH: { count: 0, totalUsd: 0 }
+    };
+    for (const row of groupByMethod) {
+      const method = row.paymentMethod as PaymentMethod;
+      byPaymentMethod[method] = {
+        count: row._count._all,
+        totalUsd: Number(row._sum.amount ?? 0)
+      };
+    }
+
+    const summary: CashierPaymentsSummary = {
+      totalPayments: total,
+      totalAmountUsd: Number(aggregateTotals._sum.amount ?? 0),
+      totalAmountBs: Number(aggregateTotals._sum.amountInBolivares ?? 0),
+      providersServed: suppliersInRange.length,
+      byPaymentMethod
+    };
+
     return {
+      summary,
       data: payments.map((payment: any) => {
         const receiptFilesUrls = buildReceiptUrls(payment.id, getReceiptFileNames(payment));
         return {
@@ -706,6 +754,7 @@ export class PaymentService {
           senderEmail: payment.senderEmail,
           confirmationNumber: payment.confirmationNumber,
           paymentDate: payment.paymentDate,
+          nota: payment.nota || null,
           receiptFiles: receiptFilesUrls,
           verified: payment.verified,
           exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
@@ -819,6 +868,7 @@ export class PaymentService {
             senderEmail: payment.senderEmail,
             confirmationNumber: payment.confirmationNumber,
             paymentDate: payment.paymentDate,
+            nota: payment.nota || null,
             receiptFiles: receiptFilesUrls,
             verified: payment.verified,
             exchangeRate: payment.exchangeRate ? Number(payment.exchangeRate) : null,
@@ -912,6 +962,7 @@ export class PaymentService {
             senderEmail: payment.senderEmail,
             confirmationNumber: payment.confirmationNumber,
             paymentDate: payment.paymentDate,
+            nota: payment.nota || null,
             receiptFiles: receiptFilesUrls,
             verified: payment.verified,
             shared: payment.shared || false,
@@ -1000,6 +1051,7 @@ export class PaymentService {
       senderEmail: payment.senderEmail,
       confirmationNumber: payment.confirmationNumber,
       paymentDate: payment.paymentDate,
+      nota: payment.nota || null,
       receiptFiles: receiptFilesUrls,
       verified: payment.verified,
       shared: payment.shared || false,
@@ -1075,6 +1127,7 @@ export class PaymentService {
         senderEmail: payment.senderEmail,
         confirmationNumber: payment.confirmationNumber,
         paymentDate: payment.paymentDate,
+        nota: payment.nota || null,
         receiptFiles: receiptFilesUrls,
         verified: payment.verified,
         shared: payment.shared || false,
@@ -1111,6 +1164,7 @@ export class PaymentService {
       removeReceipt?: boolean;
       exchangeRate?: number | null;
       amountInBolivares?: number | null;
+      nota?: string | null;
     }
   ): Promise<PaymentResponse> {
     try {
@@ -1259,6 +1313,7 @@ export class PaymentService {
       if (data.supplierId !== undefined) updateData.supplierId = data.supplierId;
       if (data.exchangeRate !== undefined) updateData.exchangeRate = data.exchangeRate || null;
       if (data.amountInBolivares !== undefined) updateData.amountInBolivares = data.amountInBolivares || null;
+      if (data.nota !== undefined) updateData.nota = data.nota || null;
       
       // Manejar comprobantes: múltiples imágenes nuevas, remover todas, lista existente (URLs) o mantener actual
       if (data.receiptFileNames !== undefined) {
@@ -1428,6 +1483,7 @@ export class PaymentService {
         senderEmail: updatedPayment.senderEmail,
         confirmationNumber: updatedPayment.confirmationNumber,
         paymentDate: updatedPayment.paymentDate,
+        nota: updatedPayment.nota || null,
         receiptFiles: receiptFilesUrls,
         verified: updatedPayment.verified,
         shared: updatedPayment.shared || false,
@@ -1593,6 +1649,7 @@ export class PaymentService {
         senderEmail: deletedPayment.senderEmail,
         confirmationNumber: deletedPayment.confirmationNumber,
         paymentDate: deletedPayment.paymentDate,
+        nota: deletedPayment.nota || null,
         receiptFiles: receiptFilesUrls,
         verified: deletedPayment.verified,
         shared: deletedPayment.shared || false,
@@ -1776,6 +1833,7 @@ export class PaymentService {
         senderEmail: updatedPayment.senderEmail,
         confirmationNumber: updatedPayment.confirmationNumber,
         paymentDate: updatedPayment.paymentDate,
+        nota: updatedPayment.nota || null,
         receiptFiles: receiptFilesUrls,
         verified: updatedPayment.verified,
         shared: updatedPayment.shared,

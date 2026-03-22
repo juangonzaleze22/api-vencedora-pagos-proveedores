@@ -156,6 +156,7 @@ export interface CreatePaymentDTO {
   senderEmail?: string;
   confirmationNumber?: string;
   paymentDate: Date;
+  nota?: string;
   exchangeRate?: number;
   amountInBolivares?: number;
   cashierId?: number;
@@ -179,6 +180,7 @@ export interface PaymentResponse {
   senderEmail: string | null;
   confirmationNumber: string | null;
   paymentDate: Date;
+  nota: string | null;
   receiptFiles: string[];
   verified: boolean;
   shared: boolean;
@@ -273,6 +275,24 @@ export interface PaginatedResponse<T> {
     totalPages: number;
   };
 }
+
+/** Totales del listado de pagos por cajero (mismos filtros que la página). */
+export interface CashierPaymentMethodTotals {
+  count: number;
+  totalUsd: number;
+}
+
+export interface CashierPaymentsSummary {
+  totalPayments: number;
+  totalAmountUsd: number;
+  totalAmountBs: number;
+  providersServed: number;
+  byPaymentMethod: Record<PaymentMethod, CashierPaymentMethodTotals>;
+}
+
+export type CashierPaymentsResponse = PaginatedResponse<PaymentResponse> & {
+  summary: CashierPaymentsSummary;
+};
 
 // Credit Types
 export type CreditStatus = 'AVAILABLE' | 'PARTIALLY_USED' | 'USED';

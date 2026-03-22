@@ -69,6 +69,7 @@ export class PaymentController {
         senderEmail: req.body.senderEmail || undefined,
         confirmationNumber: req.body.confirmationNumber || undefined,
         paymentDate: req.body.paymentDate,
+        nota: req.body.nota || undefined,
         exchangeRate: exchangeRateValue,
         amountInBolivares: amountInBolivaresValue,
         cashierId,
@@ -263,7 +264,8 @@ export class PaymentController {
       res.json({
         success: true,
         data: result.data,
-        pagination: result.pagination
+        pagination: result.pagination,
+        summary: result.summary
       });
     } catch (error: any) {
       next(error);
@@ -570,6 +572,9 @@ export class PaymentController {
       }
       if (req.body.paymentDate) {
         updateData.paymentDate = req.body.paymentDate;
+      }
+      if (req.body.nota !== undefined) {
+        updateData.nota = req.body.nota || null;
       }
       if (req.body.exchangeRate !== undefined) {
         updateData.exchangeRate = req.body.exchangeRate ? parseFloat(req.body.exchangeRate) : null;

@@ -110,3 +110,4 @@ pids/
 # Optional stylelint cache
 .stylelintcache
 
+deploy.zip

@@ -126,14 +126,11 @@ router.post(
     body('paymentMethod').isIn(['ZELLE', 'TRANSFER', 'CASH']).withMessage('Método de pago inválido'),
     body('senderName').notEmpty().withMessage('Nombre del emisor es requerido'),
     body('senderEmail').optional().custom((value) => {
-      // Permitir null, string vacío o email válido
       if (value === null || value === '' || value === undefined) {
         return true;
       }
-      // Si tiene valor, debe ser un email válido
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(value)) {
-        throw new Error('Email inválido');
+      if (typeof value !== 'string') {
+        throw new Error('El email o identificador debe ser texto');
       }
       return true;
     }),
@@ -265,14 +262,11 @@ router.put(
     body('paymentMethod').optional().isIn(['ZELLE', 'TRANSFER', 'CASH']).withMessage('Método de pago inválido'),
     body('senderName').optional().notEmpty().withMessage('Nombre del emisor es requerido'),
     body('senderEmail').optional().custom((value) => {
-      // Permitir null, string vacío o email válido
       if (value === null || value === '' || value === undefined) {
         return true;
       }
-      // Si tiene valor, debe ser un email válido
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(value)) {
-        throw new Error('Email inválido');
+      if (typeof value !== 'string') {
+        throw new Error('El email o identificador debe ser texto');
       }
       return true;
     }),

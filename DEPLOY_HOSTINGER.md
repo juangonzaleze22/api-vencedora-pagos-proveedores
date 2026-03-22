@@ -1,15 +1,47 @@
 # Despliegue en Hostinger – Qué se ejecuta
 
-## Cuando haces **build** (`npm run build`)
+## Configuración en el panel (resumen)
 
-Se ejecuta en este orden:
+| Opción | Valor |
+|--------|--------|
+| **Package manager** | **npm** |
+| **Node version** | **18** o **20** (recomendado **20**) |
+| **Build command** | **`npm run build:deploy`** |
+| **Output Directory** | **`dist`** |
+| **Entry file** | **`dist/server.js`** |
 
-1. `rimraf dist` – borra la carpeta `dist`
-2. `prisma generate` – genera el cliente de Prisma (según `schema.prisma`)
-3. **`prisma db push`** – sincroniza el schema con la base de datos (crea/actualiza tablas y columnas)
-4. `tsc` – compila TypeScript a JavaScript en `dist/`
+- **`build:deploy`** no ejecuta `prisma db push` durante el build (evita fallos si no hay `DATABASE_URL` en ese momento). Para crear/actualizar tablas al arrancar, define **`RUN_DB_PUSH_ON_START=true`** en las variables de entorno.
 
-**Importante:** En Hostinger, si el **build** se hace en un entorno donde **no** hay acceso a la base de datos (o `DATABASE_URL` no está definida), `prisma db push` puede **fallar** y el build no termina. En ese caso la base de datos no se actualiza sola.
+---
+
+## Cuando haces **build** en Hostinger: usa `npm run build:deploy`
+
+En el panel de Hostinger configura el **Build command** como:
+
+```bash
+npm run build:deploy
+```
+
+Ese script hace:
+
+1. Borra la carpeta `dist`
+2. `prisma generate` – genera el cliente de Prisma
+3. `tsc` – compila TypeScript a JavaScript en `dist/`
+
+**No** ejecuta `prisma db push` durante el build (así no falla si `DATABASE_URL` no está disponible en ese momento). Para que las tablas se creen/actualicen al arrancar la app, define la variable **`RUN_DB_PUSH_ON_START=true`** en el panel.
+
+---
+
+## Si usas **build** completo (`npm run build`) en local
+
+En local, `npm run build` hace:
+
+1. Borra `dist`
+2. `prisma generate`
+3. **`prisma db push`** – sincroniza el schema con la base de datos (requiere `DATABASE_URL` en `.env`)
+4. `tsc` – compila a `dist/`
+
+En Hostinger es mejor usar **`build:deploy`** para evitar que el build falle por falta de `DATABASE_URL` durante el despliegue.
 
 ---
 

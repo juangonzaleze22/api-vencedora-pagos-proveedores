@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'API de pagos a proveedores',
+    message: 'API de pagos a proveedores exampleee',
     health: '/health',
     api: '/api'
   });

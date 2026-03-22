@@ -95,10 +95,6 @@ export class SupplierService {
     search?: string,
     params?: SearchParams & PaginationParams
   ): Promise<PaginatedResponse<SupplierResponse>> {
-    const page = params?.page || 1;
-    const limit = params?.limit || 10;
-    const skip = (page - 1) * limit;
-
     const where: any = {};
 
     if (search) {
@@ -126,25 +122,21 @@ export class SupplierService {
       }
     }
 
-    const [suppliers, total] = await Promise.all([
-      prisma.supplier.findMany({
-        where,
-        orderBy: {
-          companyName: 'asc'
-        },
-        skip,
-        take: limit
-      }),
-      prisma.supplier.count({ where })
-    ]);
+    const suppliers = await prisma.supplier.findMany({
+      where,
+      orderBy: {
+        companyName: 'asc'
+      }
+    });
 
+    const data = suppliers.map((s: any) => this.mapToResponse(s));
     return {
-      data: suppliers.map((s: any) => this.mapToResponse(s)),
+      data,
       pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
+        page: 1,
+        limit: data.length,
+        total: data.length,
+        totalPages: 1
       }
     };
   }
