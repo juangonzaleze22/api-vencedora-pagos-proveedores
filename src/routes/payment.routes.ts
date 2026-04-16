@@ -118,9 +118,9 @@ router.post(
       if (num <= 0) {
         throw new Error('El monto debe ser mayor a 0');
       }
-      if (num > 999999.99) {
+     /*  if (num > 999999.99) {
         throw new Error('El monto es demasiado grande (máximo $999,999.99)');
-      }
+      } */
       return true;
     }),
     body('paymentMethod').isIn(['ZELLE', 'TRANSFER', 'CASH']).withMessage('Método de pago inválido'),
@@ -235,9 +235,9 @@ router.put(
         if (num <= 0) {
           throw new Error('El monto debe ser mayor a 0');
         }
-        if (num > 999999.99) {
+      /*   if (num > 999999.99) {
           throw new Error('El monto es demasiado grande (máximo $999,999.99)');
-        }
+        } */
       }
       return true;
     }),

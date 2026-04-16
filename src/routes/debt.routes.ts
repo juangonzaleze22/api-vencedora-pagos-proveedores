@@ -246,9 +246,9 @@ router.put(
         if (num <= 0) {
           throw new Error('El monto inicial debe ser mayor a 0');
         }
-        if (num > 999999.99) {
+       /*  if (num > 999999.99) {
           throw new Error('El monto inicial es demasiado grande (máximo $999,999.99)');
-        }
+        } */
       }
       return true;
     }),

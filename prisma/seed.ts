@@ -62,6 +62,11 @@ async function main() {
       email: 'cajero3@vencedora.com',
       nombre: 'Cajero 3',
       rolNombre: 'CAJERO'
+    },
+    {
+      email: 'cajero4@vencedora.com',
+      nombre: 'Cajero 4 (CXC)',
+      rolNombre: 'CAJERO'
     }
   ];
 
