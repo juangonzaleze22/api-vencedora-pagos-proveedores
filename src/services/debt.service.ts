@@ -43,10 +43,13 @@ export class DebtService {
       }, 0);
 
       const initialAmount = Number(debt.initialAmount);
-      const remainingAmount = initialAmount - totalPaid;
+      const surplusAmountAtCreation = Number(debt.surplusAmountAtCreation ?? 0);
+      // El saldo excedente aplicado al crear la deuda también reduce el monto pendiente.
+      const remainingAmount = initialAmount - surplusAmountAtCreation - totalPaid;
 
       console.log(`💰 Cálculo de montos para deuda ${debtId}:`, {
         initialAmount: initialAmount.toFixed(2),
+        surplusAmountAtCreation: surplusAmountAtCreation.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
         remainingAmount: remainingAmount.toFixed(2),
         numPayments: debt.payments.length
