@@ -103,6 +103,10 @@ export class OrderController {
         updateData.title = req.body.title;
       }
 
+      if (req.body.surplusAmountToApply !== undefined && req.body.surplusAmountToApply !== null && req.body.surplusAmountToApply !== '') {
+        updateData.surplusAmountToApply = parseFloat(req.body.surplusAmountToApply);
+      }
+
       console.log(`Actualizando orden ${id} con datos:`, updateData);
       const updatedOrder = await orderService.updateOrder(id, updateData);
       console.log(`Orden ${id} actualizada exitosamente`);

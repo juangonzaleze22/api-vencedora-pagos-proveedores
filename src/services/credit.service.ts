@@ -3,8 +3,10 @@ import { Prisma } from '@prisma/client';
 import { CreditResponse, ApplyCreditDTO, PaginationParams } from '../types';
 import { AppError } from '../middleware/error.middleware';
 import { SupplierService } from './supplier.service';
+import { DebtService } from './debt.service';
 
 const supplierService = new SupplierService();
+const debtService = new DebtService();
 
 export class CreditService {
   /**
@@ -58,6 +60,47 @@ export class CreditService {
           status: newRemaining <= 0 ? 'USED' : 'PARTIALLY_USED'
         }
       });
+    }
+  }
+
+  /**
+   * Devuelve monto al pool de créditos del proveedor repartiendo sobre líneas con consumo previo
+   * (prioriza las actualizadas más recientemente). Usar dentro de una transacción.
+   */
+  async restoreCreditToSupplier(
+    supplierId: number,
+    amount: number,
+    tx: Prisma.TransactionClient
+  ): Promise<void> {
+    if (amount <= 0) return;
+    let left = amount;
+    const credits = await tx.credit.findMany({
+      where: { supplierId },
+      orderBy: { updatedAt: 'desc' }
+    });
+    for (const credit of credits) {
+      if (left <= 1e-9) break;
+      const cAmount = Number(credit.amount);
+      const cRem = Number(credit.remaining);
+      const consumed = cAmount - cRem;
+      if (consumed <= 1e-9) continue;
+      const giveBack = Math.min(left, consumed);
+      const newRem = cRem + giveBack;
+      left -= giveBack;
+      let status: string = credit.status;
+      if (newRem >= cAmount - 1e-9) status = 'AVAILABLE';
+      else if (newRem > 1e-9) status = 'PARTIALLY_USED';
+      else status = 'USED';
+      await tx.credit.update({
+        where: { id: credit.id },
+        data: { remaining: newRem, status }
+      });
+    }
+    if (left > 1e-6) {
+      throw new AppError(
+        `No fue posible devolver $${left.toFixed(2)} USD al saldo excedente del proveedor (no hay líneas de crédito con consumo recuperable).`,
+        409
+      );
     }
   }
 
@@ -323,5 +366,62 @@ export class CreditService {
       },
       appliedAmount: applyAmount
     };
+  }
+
+  /**
+   * Revierte saldo excedente reflejado en surplusAmountAtCreation (pedidos que consumieron crédito),
+   * desde las deudas más recientes, y actualiza totalDebt del proveedor.
+   */
+  async revertConsumedCreditIntoDebts(
+    supplierId: number,
+    amountToRevert: number,
+    tx: Prisma.TransactionClient
+  ): Promise<void> {
+    if (amountToRevert <= 0) return;
+    let left = amountToRevert;
+    const debts = await tx.debt.findMany({
+      where: { supplierId, surplusAmountAtCreation: { gt: 0 } },
+      orderBy: { id: 'desc' }
+    });
+    for (const d of debts) {
+      if (left <= 1e-9) break;
+      const applied = Number(d.surplusAmountAtCreation || 0);
+      if (applied <= 0) continue;
+      const take = Math.min(applied, left);
+      const newApplied = applied - take;
+      await tx.debt.update({
+        where: { id: d.id },
+        data: {
+          surplusAmountAtCreation: newApplied > 0 ? newApplied : null
+        }
+      });
+      await debtService.updateDebtStatus(d.id, tx);
+      await supplierService.updateSupplierTotalDebt(supplierId, take, tx);
+      left -= take;
+    }
+    if (left > 1e-6) {
+      throw new AppError(
+        `No fue posible revertir $${left.toFixed(2)} del saldo excedente ya aplicado en pedidos. Revise las deudas con excedente al crearlas.`,
+        409
+      );
+    }
+  }
+
+  /**
+   * Elimina créditos ligados al pago y revierte el monto ya consumido en deudas (surplusAmountAtCreation).
+   */
+  async releaseCreditsForPayment(
+    paymentId: number,
+    supplierId: number,
+    tx: Prisma.TransactionClient
+  ): Promise<void> {
+    const credits = await tx.credit.findMany({ where: { paymentId } });
+    for (const c of credits) {
+      const consumed = Number(c.amount) - Number(c.remaining);
+      if (consumed > 0) {
+        await this.revertConsumedCreditIntoDebts(supplierId, consumed, tx);
+      }
+    }
+    await tx.credit.deleteMany({ where: { paymentId } });
   }
 }

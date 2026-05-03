@@ -76,11 +76,19 @@ router.put(
       return true;
     }),
     body('title').optional().custom((value) => value === null || value === undefined || typeof value === 'string').withMessage('El título debe ser un texto o null'),
+    body('surplusAmountToApply').optional().isFloat({ min: 0 }).withMessage('El saldo excedente a aplicar debe ser un número mayor o igual a 0'),
     body().custom((value) => {
       // Validar que al menos uno de los campos esté presente
-      const hasField = value.dispatchDate !== undefined || value.creditDays !== undefined || value.amount !== undefined || value.title !== undefined;
+      const hasField =
+        value.dispatchDate !== undefined ||
+        value.creditDays !== undefined ||
+        value.amount !== undefined ||
+        value.title !== undefined ||
+        value.surplusAmountToApply !== undefined;
       if (!hasField) {
-        throw new Error('Debe proporcionar al menos dispatchDate, creditDays, amount o title para actualizar');
+        throw new Error(
+          'Debe proporcionar al menos dispatchDate, creditDays, amount, title o surplusAmountToApply para actualizar'
+        );
       }
       return true;
     })

@@ -83,6 +83,12 @@ export interface UpdateOrderDTO {
   creditDays?: number;
   amount?: number;
   title?: string | null;
+  /**
+   * Nuevo monto total de saldo excedente (créditos del proveedor) aplicado a la deuda del pedido.
+   * Equivale al valor que quedará en `debt.surplusAmountAtCreation`. No puede superar el monto del pedido
+   * ni el saldo disponible al aumentar respecto al valor anterior.
+   */
+  surplusAmountToApply?: number;
 }
 
 export interface OrderResponse {

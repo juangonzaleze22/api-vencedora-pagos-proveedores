@@ -1,4 +1,5 @@
 import prisma from '../config/database';
+import type { Prisma } from '@prisma/client';
 import {
   CreateSupplierDTO,
   UpdateSupplierDTO,
@@ -228,12 +229,17 @@ export class SupplierService {
     });
   }
 
-  async updateSupplierTotalDebt(supplierId: number, amount: number): Promise<void> {
+  async updateSupplierTotalDebt(
+    supplierId: number,
+    amount: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx ?? prisma;
     try {
       console.log(`🔄 Actualizando total de deuda del proveedor ${supplierId} con incremento: ${amount}`);
       
       // Primero obtener el proveedor para calcular el nuevo totalDebt
-      const supplier = await prisma.supplier.findUnique({
+      const supplier = await client.supplier.findUnique({
         where: { id: supplierId },
         select: { totalDebt: true }
       });
@@ -247,7 +253,7 @@ export class SupplierService {
       // Calcular el nuevo status basado en el totalDebt actualizado
       const newStatus: SupplierStatus = newTotalDebt > 0 ? 'PENDING' : 'COMPLETED';
       
-      await prisma.supplier.update({
+      await client.supplier.update({
         where: { id: supplierId },
         data: {
           totalDebt: {

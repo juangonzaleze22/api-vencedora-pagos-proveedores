@@ -93,6 +93,7 @@ model Debt {
   dueDate               DateTime
   payments              Payment[]
   creditsOriginated     Credit[] @relation("OriginDebt")
+  paymentsSurplusTarget Payment[]    @relation("SurplusTargetDebt")
   createdAt             DateTime     @default(now())
   updatedAt             DateTime     @updatedAt
 }
@@ -118,6 +119,9 @@ model Payment {
   exchangeRate      Decimal?      @db.Decimal(10, 4)
   amountInBolivares Decimal?      @db.Decimal(10, 2)
   surplusAmount     Decimal?      @db.Decimal(10, 2)
+  surplusTargetDebtId  Int?
+  surplusAppliedToDebt Decimal?   @db.Decimal(10, 2)
+  surplusTargetDebt    Debt?       @relation("SurplusTargetDebt", fields: [surplusTargetDebtId], references: [id])
   createdBy         Int
   createdByUser     Usuario       @relation("PaymentCreator", fields: [createdBy], references: [id])
   deletedAt         DateTime?

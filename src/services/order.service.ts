@@ -387,9 +387,8 @@ export class OrderService {
 
   /**
    * Actualizar una orden
-   * Permite actualizar dispatchDate, creditDays y/o amount
+   * Permite actualizar dispatchDate, creditDays, amount, título y/o el saldo excedente aplicado a la deuda
    * Recalcula automáticamente dueDate y sincroniza con la deuda asociada
-   * Si amount cambia, actualiza la deuda y el proveedor
    */
   async updateOrder(
     orderId: number,
@@ -428,16 +427,23 @@ export class OrderService {
         throw new AppError('Orden no encontrada', 404);
       }
 
-      // 2. Validar que al menos un campo se esté actualizando
       const oldAmount = Number(currentOrder.amount);
+      const oldSurplus = Number(currentOrder.debt?.surplusAmountAtCreation ?? 0);
+      const surplusFieldPresent = data.surplusAmountToApply !== undefined;
+      const newSurplusTotal = surplusFieldPresent ? Number(data.surplusAmountToApply) : oldSurplus;
+      const surplusAmtChanged =
+        surplusFieldPresent && Math.abs(newSurplusTotal - oldSurplus) > 1e-9;
+
+      // 2. Validar que al menos un campo se esté actualizando
       const currentTitle = currentOrder.debt?.title ?? null;
       const newTitle = data.title !== undefined ? data.title : null;
       const hasChanges =
-        (data.dispatchDate !== undefined && 
-         new Date(data.dispatchDate).getTime() !== new Date(currentOrder.dispatchDate).getTime()) ||
+        (data.dispatchDate !== undefined &&
+          new Date(data.dispatchDate).getTime() !== new Date(currentOrder.dispatchDate).getTime()) ||
         (data.creditDays !== undefined && data.creditDays !== currentOrder.creditDays) ||
         (data.amount !== undefined && data.amount !== oldAmount) ||
-        (data.title !== undefined && newTitle !== currentTitle);
+        (data.title !== undefined && newTitle !== currentTitle) ||
+        surplusAmtChanged;
 
       if (!hasChanges) {
         throw new AppError('No se han realizado cambios en la orden', 400);
@@ -449,17 +455,45 @@ export class OrderService {
       }
 
       // 4. Calcular nuevos valores
-      const newDispatchDate = data.dispatchDate 
-        ? new Date(data.dispatchDate) 
+      const newDispatchDate = data.dispatchDate
+        ? new Date(data.dispatchDate)
         : new Date(currentOrder.dispatchDate);
-      
-      const newCreditDays = data.creditDays !== undefined 
-        ? data.creditDays 
-        : currentOrder.creditDays;
 
-      const newAmount = data.amount !== undefined 
-        ? data.amount 
-        : oldAmount;
+      const newCreditDays = data.creditDays !== undefined ? data.creditDays : currentOrder.creditDays;
+
+      const newAmount = data.amount !== undefined ? data.amount : oldAmount;
+
+      if (surplusFieldPresent) {
+        if (!currentOrder.debt) {
+          throw new AppError('La orden no tiene deuda asociada; no se puede ajustar el saldo excedente', 400);
+        }
+        if (!Number.isFinite(newSurplusTotal)) {
+          throw new AppError('El saldo excedente indicado no es un número válido', 400);
+        }
+        if (newSurplusTotal < 0) {
+          throw new AppError('El saldo excedente a aplicar no puede ser negativo', 400);
+        }
+        if (newSurplusTotal > newAmount) {
+          throw new AppError(
+            'El saldo excedente a aplicar no puede ser mayor al monto del pedido',
+            400
+          );
+        }
+        if (surplusAmtChanged) {
+          const deltaSurplus = newSurplusTotal - oldSurplus;
+          if (deltaSurplus > 0) {
+            const totalAvailableCredit = await creditService.getTotalAvailableCredit(
+              currentOrder.supplierId
+            );
+            if (deltaSurplus > totalAvailableCredit) {
+              throw new AppError(
+                `El incremento de saldo excedente (${deltaSurplus.toFixed(2)}) supera el saldo excedente disponible del proveedor (${totalAvailableCredit.toFixed(2)})`,
+                400
+              );
+            }
+          }
+        }
+      }
 
       // 5. Recalcular dueDate = dispatchDate + creditDays
       const newDueDate = new Date(newDispatchDate);
@@ -474,57 +508,54 @@ export class OrderService {
         newDueDate: newDueDate
       });
 
-      // 6. Calcular cambios en deuda si amount cambió o si title se actualiza
       const amountChanged = data.amount !== undefined && data.amount !== oldAmount;
       let debtUpdateData: any = { dueDate: newDueDate };
       if (data.title !== undefined) {
         debtUpdateData.title = data.title;
       }
-      let supplierUpdateData: any = {};
 
-      if (amountChanged && currentOrder.debt) {
-        const oldInitialAmount = Number(currentOrder.debt.initialAmount);
+      if ((amountChanged || surplusAmtChanged) && currentOrder.debt) {
         const oldRemainingAmount = Number(currentOrder.debt.remainingAmount);
-        
-        // Calcular la diferencia en el monto inicial
         const difference = newAmount - oldAmount;
-        
-        // El remainingAmount debe ajustarse por la diferencia
-        // Si aumentamos amount en $100, remainingAmount también aumenta en $100
-        const newRemainingAmount = Math.max(0, oldRemainingAmount + difference);
-        
-        // Recalcular el status de la deuda
-        const newDebtStatus: 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' = 
+        const surplusDelta = surplusAmtChanged ? newSurplusTotal - oldSurplus : 0;
+        const newRemainingAmount = Math.max(0, oldRemainingAmount + difference - surplusDelta);
+
+        const newDebtStatus: 'PENDING' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' =
           newRemainingAmount <= 0 ? 'PAID' : 'PENDING';
 
         debtUpdateData = {
           ...debtUpdateData,
-          initialAmount: newAmount,
           remainingAmount: newRemainingAmount,
           status: newDebtStatus
         };
+        if (amountChanged) {
+          debtUpdateData.initialAmount = newAmount;
+        }
+        if (surplusAmtChanged) {
+          debtUpdateData.surplusAmountAtCreation = newSurplusTotal > 0 ? newSurplusTotal : null;
+        }
 
-        console.log(`💰 Actualizando monto de orden:`, {
+        console.log(`💰 Actualización de deuda en orden:`, {
           oldAmount: oldAmount.toFixed(2),
           newAmount: newAmount.toFixed(2),
-          difference: difference.toFixed(2),
-          oldInitialAmount: oldInitialAmount.toFixed(2),
-          newInitialAmount: newAmount.toFixed(2),
+          amountDifference: difference.toFixed(2),
+          oldSurplus: oldSurplus.toFixed(2),
+          newSurplus: newSurplusTotal.toFixed(2),
+          surplusDelta: surplusDelta.toFixed(2),
           oldRemainingAmount: oldRemainingAmount.toFixed(2),
           newRemainingAmount: newRemainingAmount.toFixed(2),
           newDebtStatus: newDebtStatus
         });
       }
 
-      // 7. Actualizar en una transacción para mantener consistencia
+      // 6. Actualizar en una transacción para mantener consistencia
       const updatedOrder = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // Actualizar la orden
         const orderUpdateData: any = {
           dispatchDate: newDispatchDate,
           creditDays: newCreditDays,
           dueDate: newDueDate
         };
-        
+
         if (amountChanged) {
           orderUpdateData.amount = newAmount;
         }
@@ -544,7 +575,15 @@ export class OrderService {
           }
         });
 
-        // Actualizar la deuda asociada (si existe)
+        if (surplusAmtChanged && currentOrder.debt) {
+          const d = newSurplusTotal - oldSurplus;
+          if (d > 0) {
+            await creditService.consumeCreditFromSupplier(currentOrder.supplierId, d, tx);
+          } else if (d < 0) {
+            await creditService.restoreCreditToSupplier(currentOrder.supplierId, -d, tx);
+          }
+        }
+
         if (currentOrder.debt) {
           await tx.debt.update({
             where: { orderId: orderId },
@@ -553,8 +592,7 @@ export class OrderService {
           console.log(`✅ Deuda ${currentOrder.debt.id} actualizada`);
         }
 
-        // Si amount cambió, recalcular totalDebt del proveedor
-        if (amountChanged) {
+        if (amountChanged || surplusAmtChanged) {
           // Obtener todas las deudas del proveedor
           const allDebtsForSupplier = await tx.debt.findMany({
             where: {

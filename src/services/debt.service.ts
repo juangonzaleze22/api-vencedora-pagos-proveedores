@@ -5,13 +5,14 @@ import { AppError } from '../middleware/error.middleware';
 import { getReceiptFileNames, buildReceiptUrls } from '../utils/receiptUrls';
 
 export class DebtService {
-  async updateDebtStatus(debtId: number): Promise<void> {
+  async updateDebtStatus(debtId: number, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx ?? prisma;
     try {
       console.log(`🔄 Actualizando estado de deuda ${debtId}...`);
       
       // Forzar una consulta fresca sin caché para asegurar que incluya el último pago
       // IMPORTANTE: Excluir pagos eliminados del cálculo
-      const debt = await prisma.debt.findUnique({
+      const debt = await client.debt.findUnique({
         where: { id: debtId },
         include: {
           payments: {
@@ -79,7 +80,7 @@ export class DebtService {
       // Asegurar que remainingAmount no sea negativo
       const finalRemainingAmount = Math.max(0, remainingAmount);
       
-      await prisma.debt.update({
+      await client.debt.update({
         where: { id: debtId },
         data: {
           remainingAmount: finalRemainingAmount,

@@ -1,4 +1,5 @@
 import prisma from '../config/database';
+import { Prisma } from '@prisma/client';
 import {
   CashierPaymentsResponse,
   CashierPaymentsSummary,
@@ -11,6 +12,7 @@ import {
 import { AppError } from '../middleware/error.middleware';
 import { DebtService } from './debt.service';
 import { SupplierService } from './supplier.service';
+import { CreditService } from './credit.service';
 import { env } from '../config/env';
 import { getReceiptFileNames, buildReceiptUrl, buildReceiptUrls } from '../utils/receiptUrls';
 
@@ -19,6 +21,7 @@ type PaymentMethod = 'ZELLE' | 'TRANSFER' | 'CASH';
 
 const debtService = new DebtService();
 const supplierService = new SupplierService();
+const creditService = new CreditService();
 
 export class PaymentService {
   async createPayment(
@@ -264,6 +267,7 @@ export class PaymentService {
 
       // Manejar excedente
       let creditCreated = null;
+      let appliedToTargetAmount = 0;
       if (surplusAmount > 0) {
         console.log(`💰 Excedente detectado: $${surplusAmount.toFixed(2)}`);
 
@@ -282,6 +286,7 @@ export class PaymentService {
 
           const targetRemaining = Number(targetDebt.remainingAmount);
           const amountForTarget = Math.min(surplusAmount, targetRemaining);
+          appliedToTargetAmount = amountForTarget;
 
           await prisma.debt.update({
             where: { id: surplusTargetDebtId },
@@ -324,6 +329,16 @@ export class PaymentService {
           });
           console.log(`💳 Crédito creado para proveedor #${supplierId}: $${surplusAmount.toFixed(2)}`);
         }
+      }
+
+      if (appliedToTargetAmount > 0 && surplusTargetDebtId) {
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: {
+            surplusTargetDebtId: surplusTargetDebtId,
+            surplusAppliedToDebt: appliedToTargetAmount
+          }
+        });
       }
 
       const names = getReceiptFileNames(payment);
@@ -1226,7 +1241,8 @@ export class PaymentService {
         const otherPaymentsNewDebt = await prisma.payment.findMany({
           where: {
             debtId: newDebtId,
-            id: { not: paymentId }
+            id: { not: paymentId },
+            deletedAt: null
           },
           select: { amount: true }
         });
@@ -1250,7 +1266,8 @@ export class PaymentService {
           const otherPayments = await prisma.payment.findMany({
             where: {
               debtId: oldDebtId,
-              id: { not: paymentId }
+              id: { not: paymentId },
+              deletedAt: null
             },
             select: { amount: true }
           });
@@ -1263,12 +1280,12 @@ export class PaymentService {
           const initialAmount = Number(oldPayment.debt.initialAmount);
           const maxAllowed = initialAmount - totalOtherPayments;
 
-          if (newAmount > maxAllowed) {
+          /* if (newAmount > maxAllowed) {
             throw new Error(
               `El nuevo monto ($${newAmount.toFixed(2)}) excede el monto máximo permitido ` +
               `($${maxAllowed.toFixed(2)}). Monto ya pagado por otros pagos: $${totalOtherPayments.toFixed(2)}`
             );
-          }
+          } */
         }
       }
 
@@ -1374,59 +1391,131 @@ export class PaymentService {
         updateData.receiptFiles = toKeep.length > 0 ? (toKeep as unknown as object) : null;
       }
 
-      // 6. ACTUALIZAR PROVEEDORES (si cambió)
-      if (newSupplierId !== oldSupplierId) {
-        console.log(`🔄 Cambiando proveedor de ${oldSupplierId} a ${newSupplierId}`);
-        
-        // Restar monto del proveedor anterior
-        await supplierService.updateSupplierTotalDebt(oldSupplierId, oldAmount);
-        
-        // Sumar monto al nuevo proveedor
-        await supplierService.updateSupplierTotalDebt(newSupplierId, -newAmount);
-        
-        // Actualizar lastPaymentDate del nuevo proveedor
-        if (data.paymentDate) {
-          await supplierService.updateSupplierLastPaymentDate(
-            newSupplierId,
-            new Date(data.paymentDate)
-          );
-        }
-      } else if (data.amount !== undefined && newAmount !== oldAmount) {
-        // Si solo cambió el monto (mismo proveedor)
-        const difference = newAmount - oldAmount;
-        await supplierService.updateSupplierTotalDebt(newSupplierId, -difference);
-        
-        if (data.paymentDate) {
-          await supplierService.updateSupplierLastPaymentDate(
-            newSupplierId,
-            new Date(data.paymentDate)
-          );
-        }
-      }
+      const surplusRelevantChange =
+        data.amount !== undefined ||
+        data.debtId !== undefined ||
+        data.supplierId !== undefined;
 
-      // 7. Actualizar el pago PRIMERO (antes de recalcular deudas)
-      // Esto es importante para que updateDebtStatus use el monto actualizado
-      const updatedPayment = await prisma.payment.update({
-        where: { id: paymentId },
-        data: updateData,
-        include: {
-          supplier: {
-            select: {
-              id: true,
-              companyName: true,
-              taxId: true,
-              phone: true
-            }
-          },
-          createdByUser: {
-            select: {
-              id: true,
-              nombre: true,
-              email: true
-            }
+      const paymentInclude = {
+        supplier: {
+          select: {
+            id: true,
+            companyName: true,
+            taxId: true,
+            phone: true
+          }
+        },
+        createdByUser: {
+          select: {
+            id: true,
+            nombre: true,
+            email: true
           }
         }
-      });
+      } as const;
+
+      let updatedPayment;
+
+      if (surplusRelevantChange) {
+        updatedPayment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+          await this.revertDirectSurplusApplyToDebt(
+            tx,
+            oldPayment.surplusTargetDebtId,
+            oldPayment.surplusAppliedToDebt
+          );
+          await creditService.releaseCreditsForPayment(paymentId, oldSupplierId, tx);
+
+          if (newSupplierId !== oldSupplierId) {
+            console.log(`🔄 Cambiando proveedor de ${oldSupplierId} a ${newSupplierId}`);
+            await supplierService.updateSupplierTotalDebt(oldSupplierId, oldAmount, tx);
+            await supplierService.updateSupplierTotalDebt(newSupplierId, -newAmount, tx);
+          } else if (data.amount !== undefined && newAmount !== oldAmount) {
+            const difference = newAmount - oldAmount;
+            await supplierService.updateSupplierTotalDebt(newSupplierId, -difference, tx);
+          }
+
+          const up = await tx.payment.update({
+            where: { id: paymentId },
+            data: updateData,
+            include: paymentInclude
+          });
+
+          if (newDebtId !== oldDebtId) {
+            console.log(`🔄 Recalculando deudas: anterior ${oldDebtId}, nueva ${newDebtId}`);
+            await debtService.updateDebtStatus(oldDebtId, tx);
+            await debtService.updateDebtStatus(newDebtId, tx);
+          } else {
+            console.log(`🔄 Recalculando deuda ${up.debtId} tras cambio de pago...`);
+            await debtService.updateDebtStatus(up.debtId, tx);
+          }
+
+          await this.syncSurplusAfterPaymentEdit(tx, {
+            paymentId,
+            supplierId: up.supplierId,
+            debtId: up.debtId,
+            paymentAmount: Number(up.amount)
+          });
+
+          const fresh = await tx.payment.findUnique({
+            where: { id: paymentId },
+            include: paymentInclude
+          });
+          if (!fresh) {
+            throw new Error('Pago no encontrado tras actualizar');
+          }
+          return fresh;
+        });
+
+        if (data.paymentDate) {
+          await supplierService.updateSupplierLastPaymentDate(
+            updatedPayment.supplierId,
+            new Date(data.paymentDate)
+          );
+        }
+      } else {
+        // 6. ACTUALIZAR PROVEEDORES (si cambió)
+        if (newSupplierId !== oldSupplierId) {
+          console.log(`🔄 Cambiando proveedor de ${oldSupplierId} a ${newSupplierId}`);
+
+          await supplierService.updateSupplierTotalDebt(oldSupplierId, oldAmount);
+
+          await supplierService.updateSupplierTotalDebt(newSupplierId, -newAmount);
+
+          if (data.paymentDate) {
+            await supplierService.updateSupplierLastPaymentDate(
+              newSupplierId,
+              new Date(data.paymentDate)
+            );
+          }
+        } else if (data.amount !== undefined && newAmount !== oldAmount) {
+          const difference = newAmount - oldAmount;
+          await supplierService.updateSupplierTotalDebt(newSupplierId, -difference);
+
+          if (data.paymentDate) {
+            await supplierService.updateSupplierLastPaymentDate(
+              newSupplierId,
+              new Date(data.paymentDate)
+            );
+          }
+        }
+
+        updatedPayment = await prisma.payment.update({
+          where: { id: paymentId },
+          data: updateData,
+          include: paymentInclude
+        });
+
+        if (newDebtId !== oldDebtId) {
+          console.log(`🔄 Recalculando deudas: anterior ${oldDebtId}, nueva ${newDebtId}`);
+
+          await debtService.updateDebtStatus(oldDebtId);
+
+          await debtService.updateDebtStatus(newDebtId);
+        } else if (data.amount !== undefined && newAmount !== oldAmount) {
+          console.log(`🔄 Recalculando deuda ${newDebtId} con nuevo monto...`);
+          await debtService.updateDebtStatus(newDebtId);
+        }
+      }
 
       console.log('✅ Pago actualizado en BD:', {
         paymentId: updatedPayment.id,
@@ -1439,23 +1528,6 @@ export class PaymentService {
         newReceiptFiles: updatedPayment.receiptFiles
       });
 
-      // 8. RECALCULAR DEUDAS DESPUÉS de actualizar el pago
-      // Ahora updateDebtStatus usará el monto actualizado del pago
-      if (newDebtId !== oldDebtId) {
-        console.log(`🔄 Recalculando deudas: anterior ${oldDebtId}, nueva ${newDebtId}`);
-        
-        // Recalcular deuda anterior (sumar el monto de vuelta)
-        await debtService.updateDebtStatus(oldDebtId);
-        
-        // Recalcular nueva deuda (restar el monto)
-        await debtService.updateDebtStatus(newDebtId);
-      } else if (data.amount !== undefined && newAmount !== oldAmount) {
-        // Si solo cambió el monto (misma deuda)
-        console.log(`🔄 Recalculando deuda ${newDebtId} con nuevo monto...`);
-        await debtService.updateDebtStatus(newDebtId);
-      }
-
-      // 9. Obtener la deuda actualizada para verificar
       const updatedDebt = await prisma.debt.findUnique({
         where: { id: updatedPayment.debtId },
         select: {
@@ -1558,38 +1630,47 @@ export class PaymentService {
         currentDebtStatus: payment.debt.status
       });
 
-      // 3. Marcar el pago como eliminado (soft delete)
-      const deletedPayment = await prisma.payment.update({
-        where: { id: paymentId },
-        data: {
-          deletedAt: new Date(),
-          deletedBy: userId,
-          deletionReason: reason || null
-        },
-        include: {
-          supplier: {
-            select: {
-              id: true,
-              companyName: true,
-              taxId: true,
-              phone: true
-            }
+      // 3. Revertir excedentes del pago, eliminar créditos asociados y marcar eliminación lógica (transacción)
+      const deletedPayment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await this.revertDirectSurplusApplyToDebt(
+          tx,
+          payment.surplusTargetDebtId,
+          payment.surplusAppliedToDebt
+        );
+        await creditService.releaseCreditsForPayment(paymentId, supplierId, tx);
+
+        return tx.payment.update({
+          where: { id: paymentId },
+          data: {
+            deletedAt: new Date(),
+            deletedBy: userId,
+            deletionReason: reason || null
           },
-          createdByUser: {
-            select: {
-              id: true,
-              nombre: true,
-              email: true
-            }
-          },
-          deletedByUser: {
-            select: {
-              id: true,
-              nombre: true,
-              email: true
+          include: {
+            supplier: {
+              select: {
+                id: true,
+                companyName: true,
+                taxId: true,
+                phone: true
+              }
+            },
+            createdByUser: {
+              select: {
+                id: true,
+                nombre: true,
+                email: true
+              }
+            },
+            deletedByUser: {
+              select: {
+                id: true,
+                nombre: true,
+                email: true
+              }
             }
           }
-        }
+        });
       });
 
       console.log('✅ Pago marcado como eliminado:', {
@@ -1859,6 +1940,82 @@ export class PaymentService {
       console.error('❌ Error en PaymentService.sharePayment:', error);
       throw error;
     }
+  }
+
+  /**
+   * Restaura el remaining de la deuda que recibió excedente vía APPLY_TO_DEBT (sin tocar totalDebt del proveedor:
+   * el flujo de alta/baja del pago ya lo refleja).
+   */
+  private async revertDirectSurplusApplyToDebt(
+    tx: Prisma.TransactionClient,
+    surplusTargetDebtId: number | null | undefined,
+    surplusAppliedToDebt: unknown
+  ): Promise<void> {
+    if (surplusTargetDebtId == null || surplusAppliedToDebt == null) return;
+    const amt = Number(surplusAppliedToDebt);
+    if (!Number.isFinite(amt) || amt <= 0) return;
+    const debt = await tx.debt.findUnique({
+      where: { id: surplusTargetDebtId },
+      select: { remainingAmount: true }
+    });
+    if (!debt) return;
+    const newRem = Number(debt.remainingAmount) + amt;
+    await tx.debt.update({
+      where: { id: surplusTargetDebtId },
+      data: {
+        remainingAmount: Math.max(0, newRem),
+        status: newRem <= 0 ? 'PAID' : 'PENDING'
+      }
+    });
+  }
+
+  /**
+   * Tras editar monto/deuda del pago: recalcula excedente y registros Credit (solo saldo a favor CREDIT).
+   */
+  private async syncSurplusAfterPaymentEdit(
+    tx: Prisma.TransactionClient,
+    params: { paymentId: number; supplierId: number; debtId: number; paymentAmount: number }
+  ): Promise<void> {
+    const { debtId, paymentId, supplierId, paymentAmount } = params;
+    const agg = await tx.payment.aggregate({
+      where: { debtId, deletedAt: null },
+      _sum: { amount: true }
+    });
+    const debtRow = await tx.debt.findUnique({
+      where: { id: debtId },
+      select: { initialAmount: true, surplusAmountAtCreation: true }
+    });
+    if (!debtRow) return;
+    const totalPaid = Number(agg._sum.amount ?? 0);
+    const others = totalPaid - paymentAmount;
+    const owedBefore =
+      Number(debtRow.initialAmount) -
+      Number(debtRow.surplusAmountAtCreation ?? 0) -
+      others;
+    const newSurplus = Math.max(0, paymentAmount - owedBefore);
+
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: {
+        surplusAmount: newSurplus > 0 ? newSurplus : null,
+        surplusTargetDebtId: null,
+        surplusAppliedToDebt: null
+      }
+    });
+
+    if (newSurplus <= 0) return;
+
+    await tx.credit.create({
+      data: {
+        paymentId,
+        originDebtId: debtId,
+        supplierId,
+        amount: newSurplus,
+        remaining: newSurplus,
+        status: 'AVAILABLE',
+        description: `Excedente pago #${paymentId}`
+      }
+    });
   }
 }
 
