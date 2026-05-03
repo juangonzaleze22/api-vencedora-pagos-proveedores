@@ -1,5 +1,8 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Incluir Linux explícito: en Hostinger/cPanel el motor debe coincidir con OpenSSL del servidor.
+  // Si generas en Windows y subes node_modules, sin esto suele fallar o aparecer PANIC en runtime.
+  binaryTargets = ["native", "debian-openssl-3.0.x", "debian-openssl-1.1.x"]
 }
 
 datasource db {
